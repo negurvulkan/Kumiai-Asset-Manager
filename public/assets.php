@@ -2,6 +2,9 @@
 require_once __DIR__ . '/../includes/layout.php';
 require_login();
 
+$message = null;
+$error = null;
+
 $projects = user_projects($pdo);
 if (empty($projects)) {
     render_header('Assets');
@@ -10,6 +13,14 @@ if (empty($projects)) {
     exit;
 }
 $projectId = isset($_GET['project_id']) ? (int)$_GET['project_id'] : (int)$projects[0]['id'];
+$projectContext = null;
+foreach ($projects as $project) {
+    if ((int)$project['id'] === $projectId) {
+        $projectContext = $project;
+        break;
+    }
+}
+$canReview = $projectContext && in_array($projectContext['role'], ['owner', 'admin', 'editor'], true);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_asset') {
     $name = trim($_POST['asset_name'] ?? '');
@@ -61,6 +72,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_r
     }
 }
 
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'review_revision') {
+    $revisionId = (int)($_POST['revision_id'] ?? 0);
+    $status = $_POST['review_status'] ?? 'pending';
+    $notes = trim($_POST['notes'] ?? '');
+    $validStatus = ['pending', 'approved', 'rejected'];
+    if (!in_array($status, $validStatus, true)) {
+        $error = 'Ungültiger Review-Status.';
+    } elseif (!$canReview) {
+        $error = 'Keine Berechtigung für Reviews.';
+    } else {
+        $updateStmt = $pdo->prepare('UPDATE asset_revisions r JOIN assets a ON a.id = r.asset_id SET r.review_status = :status, r.reviewed_by = :reviewed_by, r.reviewed_at = NOW(), r.notes = :notes WHERE r.id = :id AND a.project_id = :project_id');
+        $updateStmt->execute([
+            'status' => $status,
+            'reviewed_by' => current_user()['id'],
+            'notes' => $notes,
+            'id' => $revisionId,
+            'project_id' => $projectId,
+        ]);
+        if ($updateStmt->rowCount() > 0) {
+            $message = 'Review-Status gespeichert.';
+        } else {
+            $error = 'Revision nicht gefunden.';
+        }
+    }
+}
+
 $entitiesStmt = $pdo->prepare('SELECT id, name FROM entities WHERE project_id = :project_id ORDER BY name');
 $entitiesStmt->execute(['project_id' => $projectId]);
 $entities = $entitiesStmt->fetchAll();
@@ -69,7 +106,7 @@ $assetsStmt = $pdo->prepare('SELECT a.*, e.name AS primary_entity_name FROM asse
 $assetsStmt->execute(['project_id' => $projectId]);
 $assets = $assetsStmt->fetchAll();
 
-$revisionsStmt = $pdo->prepare('SELECT r.*, a.name AS asset_name FROM asset_revisions r JOIN assets a ON a.id = r.asset_id WHERE a.project_id = :project_id ORDER BY r.created_at DESC, r.version DESC LIMIT 50');
+$revisionsStmt = $pdo->prepare('SELECT r.*, a.name AS asset_name, u.display_name AS reviewed_by_name FROM asset_revisions r JOIN assets a ON a.id = r.asset_id LEFT JOIN users u ON u.id = r.reviewed_by WHERE a.project_id = :project_id ORDER BY r.created_at DESC, r.version DESC LIMIT 50');
 $revisionsStmt->execute(['project_id' => $projectId]);
 $revisions = $revisionsStmt->fetchAll();
 
@@ -89,6 +126,8 @@ render_header('Assets');
         </select>
     </form>
 </div>
+<?php if ($message): ?><div class="alert alert-success"><?= htmlspecialchars($message) ?></div><?php endif; ?>
+<?php if ($error): ?><div class="alert alert-danger"><?= htmlspecialchars($error) ?></div><?php endif; ?>
 <div class="row g-4">
     <div class="col-lg-6">
         <div class="card shadow-sm mb-3">
@@ -174,6 +213,9 @@ render_header('Assets');
                                     <th>Version</th>
                                     <th>Datei</th>
                                     <th>Status</th>
+                                    <th>Reviewer</th>
+                                    <th>Notizen</th>
+                                    <th class="text-end">Aktionen</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -182,7 +224,29 @@ render_header('Assets');
                                         <td><?= htmlspecialchars($revision['asset_name']) ?></td>
                                         <td>v<?= (int)$revision['version'] ?></td>
                                         <td><code><?= htmlspecialchars($revision['file_path']) ?></code></td>
-                                        <td><?= htmlspecialchars($revision['review_status']) ?></td>
+                                        <td>
+                                            <span class="badge bg-light text-dark border text-uppercase"><?= htmlspecialchars($revision['review_status']) ?></span>
+                                            <div class="small text-muted"><?= $revision['reviewed_at'] ? 'am ' . htmlspecialchars($revision['reviewed_at']) : 'offen' ?></div>
+                                        </td>
+                                        <td><?= htmlspecialchars($revision['reviewed_by_name'] ?? '—') ?></td>
+                                        <td class="small"><?= $revision['notes'] ? nl2br(htmlspecialchars($revision['notes'])) : '–' ?></td>
+                                        <td class="text-end">
+                                            <?php if ($canReview): ?>
+                                                <form method="post" class="d-flex gap-2 align-items-center flex-wrap justify-content-end">
+                                                    <input type="hidden" name="action" value="review_revision">
+                                                    <input type="hidden" name="revision_id" value="<?= (int)$revision['id'] ?>">
+                                                    <select class="form-select form-select-sm w-auto" name="review_status">
+                                                        <option value="pending" <?= $revision['review_status'] === 'pending' ? 'selected' : '' ?>>pending</option>
+                                                        <option value="approved" <?= $revision['review_status'] === 'approved' ? 'selected' : '' ?>>approved</option>
+                                                        <option value="rejected" <?= $revision['review_status'] === 'rejected' ? 'selected' : '' ?>>rejected</option>
+                                                    </select>
+                                                    <input type="text" class="form-control form-control-sm" name="notes" value="<?= htmlspecialchars($revision['notes'] ?? '') ?>" placeholder="Kommentar" aria-label="Review-Notiz">
+                                                    <button class="btn btn-sm btn-primary" type="submit">Speichern</button>
+                                                </form>
+                                            <?php else: ?>
+                                                <span class="text-muted">–</span>
+                                            <?php endif; ?>
+                                        </td>
                                     </tr>
                                 <?php endforeach; ?>
                             </tbody>

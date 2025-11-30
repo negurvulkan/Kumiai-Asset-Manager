@@ -135,9 +135,10 @@ Selbstgehostete LAMP-WebApp zur Verwaltung von Kreativprojekten (Manga, Comics, 
   INSERT INTO users (email, password_hash, display_name) VALUES ('admin@example.com', '<hash-aus-password_hash>', 'Admin');
   ```
   (`php -r "echo password_hash('admin123', PASSWORD_DEFAULT);"` liefert den passenden Hash.)
-- **Projektverwaltung:** `public/projects.php` listet eigene Projekte und legt neue an (Creator wird Owner). Projektdetails zeigen hinterlegte Entity-Typen.
+- **Projektverwaltung & Rollen:** `public/projects.php` listet eigene Projekte, legt neue an (Creator wird Owner) und erlaubt Owner/Admin, bestehende User per E-Mail mit einer Rolle dem Projekt zuzuweisen.
 - **Generische Entities:** `public/entities.php` erlaubt pro Projekt das Anlegen von Entity-Typen sowie Entities (Name/Slug/Beschreibung, Metadata-JSON placeholder).
 - **Assets & Revisionen:** `public/assets.php` legt Assets (Typ, primäre Entity) an und erfasst Revisionen mit Dateipfad/Hash/MIME. File-Inventory wird beim Anlegen einer Revision auf `linked` gesetzt.
+- **Review-Workflow für Revisionen:** Im Revisions-Panel können Owner/Admin/Editor den Review-Status (pending/approved/rejected) setzen und eine kurze Notiz hinterlegen; Reviewer und Zeitpunkt werden gespeichert.
 - **File-Inventory & Review:**
   - `scripts/scan.php <project_id>` scannt das Projekt-Root (aus `projects.root_path`), speichert Hash/Size/MIME als `untracked`.
   - `public/files.php` listet Inventory (100 Einträge) und erlaubt für `untracked` Dateien: als `orphaned` markieren oder per Asset-Auswahl eine Revision anlegen (Status `linked`).
