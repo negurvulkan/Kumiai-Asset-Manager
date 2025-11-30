@@ -35,6 +35,7 @@
 ## Review-Workflow für untracked Dateien
 - Untracked-Ansicht filtert nach Ordner, Dateityp, Größe und Änderungsdatum.
 - Aktionen: Neues Asset erstellen und verknüpfen, bestehendem Asset als neue Revision zuordnen oder Datei ignorieren/löschen/als orphan markieren.
+- Gescannte Bilddateien erhalten in der Untracked-Ansicht eine Thumbnail-Vorschau zur schnelleren Sichtprüfung.
 
 ## Naming-Templates & Auto-Renaming
 - Projekt- und Asset-Typ-bezogene Templates mit Platzhaltern wie `{project}`, `{project_slug}`, `{entity_type}`, `{entity_slug}`, `{asset_type}`, `{view}`, `{version}`, `{date}`, `{datetime}`, `{ext}`.
