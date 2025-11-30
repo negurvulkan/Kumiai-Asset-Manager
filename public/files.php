@@ -2,6 +2,7 @@
 require_once __DIR__ . '/../includes/layout.php';
 require_once __DIR__ . '/../includes/naming.php';
 require_once __DIR__ . '/../includes/files.php';
+require_once __DIR__ . '/../includes/scanner.php';
 require_login();
 
 $message = null;
@@ -24,7 +25,28 @@ if (!$projectRow) {
     render_footer();
     exit;
 }
+$projectRole = null;
+foreach ($projects as $projectMeta) {
+    if ((int)$projectMeta['id'] === $projectId) {
+        $projectRole = $projectMeta['role'];
+        break;
+    }
+}
+$projectRow['role'] = $projectRole;
 $projectRoot = rtrim($projectRow['root_path'], '/');
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'scan') {
+    if (!user_can_manage_project($projectRow)) {
+        $error = 'Nur Owner/Admin dürfen den Scanner starten.';
+    } else {
+        $result = scan_project($pdo, $projectId);
+        if ($result['success']) {
+            $message = $result['message'];
+        } else {
+            $error = $result['message'];
+        }
+    }
+}
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'mark_orphan') {
     $inventoryId = (int)($_POST['inventory_id'] ?? 0);
@@ -131,14 +153,22 @@ render_header('Files');
         <h1 class="h4 mb-0">Dateien</h1>
         <small class="text-muted">Inventarstatus und Review-Workflow.</small>
     </div>
-    <form method="get" class="d-flex align-items-center gap-2">
-        <label class="form-label mb-0" for="project_id">Projekt</label>
-        <select class="form-select" name="project_id" id="project_id" onchange="this.form.submit()">
-            <?php foreach ($projects as $project): ?>
-                <option value="<?= (int)$project['id'] ?>" <?= $projectId === (int)$project['id'] ? 'selected' : '' ?>><?= htmlspecialchars($project['name']) ?></option>
-            <?php endforeach; ?>
-        </select>
-    </form>
+    <div class="d-flex align-items-center gap-2">
+        <form method="get" class="d-flex align-items-center gap-2 mb-0">
+            <label class="form-label mb-0" for="project_id">Projekt</label>
+            <select class="form-select" name="project_id" id="project_id" onchange="this.form.submit()">
+                <?php foreach ($projects as $project): ?>
+                    <option value="<?= (int)$project['id'] ?>" <?= $projectId === (int)$project['id'] ? 'selected' : '' ?>><?= htmlspecialchars($project['name']) ?></option>
+                <?php endforeach; ?>
+            </select>
+        </form>
+        <?php if (user_can_manage_project($projectRow)): ?>
+            <form method="post" class="d-flex align-items-center gap-2 mb-0">
+                <input type="hidden" name="action" value="scan">
+                <button class="btn btn-sm btn-outline-primary" type="submit">Scanner starten</button>
+            </form>
+        <?php endif; ?>
+    </div>
 </div>
 <?php if ($message): ?><div class="alert alert-success"><?= htmlspecialchars($message) ?></div><?php endif; ?>
 <?php if ($error): ?><div class="alert alert-danger"><?= htmlspecialchars($error) ?></div><?php endif; ?>
