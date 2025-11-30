@@ -2,12 +2,13 @@
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/files.php';
 
-function scan_project(PDO $pdo, int $projectId): array
+function scan_project(PDO $pdo, int $projectId, bool $softRun = false): array
 {
     $result = [
         'success' => false,
         'message' => 'Unbekannter Fehler.',
         'files_scanned' => 0,
+        'files_added' => 0,
     ];
 
     if ($projectId <= 0) {
@@ -33,6 +34,8 @@ function scan_project(PDO $pdo, int $projectId): array
     $now = date('Y-m-d H:i:s');
     $processed = 0;
 
+    $inserted = 0;
+
     foreach ($iterator as $file) {
         if ($file->isDir()) {
             continue;
@@ -43,21 +46,39 @@ function scan_project(PDO $pdo, int $projectId): array
         $size = $file->getSize();
         $mime = mime_content_type($file->getPathname()) ?: 'application/octet-stream';
 
-        $stmt = $pdo->prepare('INSERT INTO file_inventory (project_id, file_path, file_hash, file_size_bytes, mime_type, status, last_seen_at) VALUES (:project_id, :file_path, :file_hash, :file_size_bytes, :mime_type, "untracked", :last_seen_at) ON DUPLICATE KEY UPDATE file_hash = VALUES(file_hash), file_size_bytes = VALUES(file_size_bytes), mime_type = VALUES(mime_type), last_seen_at = VALUES(last_seen_at)');
-        $stmt->execute([
-            'project_id' => $projectId,
-            'file_path' => $relative,
-            'file_hash' => $hash,
-            'file_size_bytes' => $size,
-            'mime_type' => $mime,
-            'last_seen_at' => $now,
-        ]);
+        if ($softRun) {
+            $stmt = $pdo->prepare('INSERT IGNORE INTO file_inventory (project_id, file_path, file_hash, file_size_bytes, mime_type, status, last_seen_at) VALUES (:project_id, :file_path, :file_hash, :file_size_bytes, :mime_type, "untracked", :last_seen_at)');
+            $stmt->execute([
+                'project_id' => $projectId,
+                'file_path' => $relative,
+                'file_hash' => $hash,
+                'file_size_bytes' => $size,
+                'mime_type' => $mime,
+                'last_seen_at' => $now,
+            ]);
+            $inserted += (int)$stmt->rowCount();
+        } else {
+            $stmt = $pdo->prepare('INSERT INTO file_inventory (project_id, file_path, file_hash, file_size_bytes, mime_type, status, last_seen_at) VALUES (:project_id, :file_path, :file_hash, :file_size_bytes, :mime_type, "untracked", :last_seen_at) ON DUPLICATE KEY UPDATE file_hash = VALUES(file_hash), file_size_bytes = VALUES(file_size_bytes), mime_type = VALUES(mime_type), last_seen_at = VALUES(last_seen_at)');
+            $stmt->execute([
+                'project_id' => $projectId,
+                'file_path' => $relative,
+                'file_hash' => $hash,
+                'file_size_bytes' => $size,
+                'mime_type' => $mime,
+                'last_seen_at' => $now,
+            ]);
+        }
         $processed++;
     }
 
     $result['success'] = true;
     $result['files_scanned'] = $processed;
-    $result['message'] = sprintf('Scan abgeschlossen für %s (%d) – %d Dateien geprüft.', $project['name'], $projectId, $processed);
+    $result['files_added'] = $inserted;
+    if ($softRun) {
+        $result['message'] = sprintf('Soft-Scan abgeschlossen für %s (%d) – %d Dateien geprüft, %d neu.', $project['name'], $projectId, $processed, $inserted);
+    } else {
+        $result['message'] = sprintf('Scan abgeschlossen für %s (%d) – %d Dateien geprüft.', $project['name'], $projectId, $processed);
+    }
 
     return $result;
 }
