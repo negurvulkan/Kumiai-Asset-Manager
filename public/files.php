@@ -146,6 +146,16 @@ $inventoryStmt = $pdo->prepare('SELECT * FROM file_inventory WHERE project_id = 
 $inventoryStmt->execute(['project_id' => $projectId]);
 $inventory = $inventoryStmt->fetchAll();
 
+$inventoryThumbs = [];
+foreach ($inventory as $file) {
+    $thumb = thumbnail_public_if_exists($projectId, $file['file_path']);
+    $absolutePath = $projectRoot . $file['file_path'];
+    if (!$thumb && $projectRoot !== '' && file_exists($absolutePath)) {
+        $thumb = generate_thumbnail($projectId, $file['file_path'], $absolutePath, 200);
+    }
+    $inventoryThumbs[(int)$file['id']] = $thumb;
+}
+
 render_header('Files');
 ?>
 <div class="d-flex align-items-center justify-content-between mb-3">
@@ -182,6 +192,7 @@ render_header('Files');
                 <table class="table table-sm align-middle mb-0">
                     <thead>
                         <tr>
+                            <th style="width: 120px">Vorschau</th>
                             <th>Pfad</th>
                             <th>Status</th>
                             <th>Hash</th>
@@ -192,6 +203,14 @@ render_header('Files');
                     <tbody>
                         <?php foreach ($inventory as $file): ?>
                             <tr>
+                                <?php $thumb = $inventoryThumbs[(int)$file['id']] ?? null; ?>
+                                <td class="align-middle">
+                                    <?php if ($thumb): ?>
+                                        <img src="<?= htmlspecialchars($thumb) ?>" alt="Preview" class="img-thumbnail" style="max-width: 96px; max-height: 96px;">
+                                    <?php else: ?>
+                                        <div class="text-muted small">Keine Vorschau</div>
+                                    <?php endif; ?>
+                                </td>
                                 <td><code><?= htmlspecialchars($file['file_path']) ?></code></td>
                                 <td><?= htmlspecialchars($file['status']) ?></td>
                                 <td class="small text-muted"><?= htmlspecialchars($file['file_hash']) ?></td>
