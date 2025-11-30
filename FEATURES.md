@@ -30,6 +30,7 @@
 - File-Inventory speichert Projekt, relativen Pfad, Hash, Last-Seen sowie optionales Revision-Mapping mit Status (`untracked`, `linked`, `orphaned`, optional `missing`).
 - Scanner durchsucht rekursiv den Projekt-Root, berechnet Hashes, legt neue Einträge an, markiert neue Dateien als `untracked`, erzeugt neue Revisionen bei Änderungen und markiert gelöschte Dateien als `missing`.
 - Scanner-UI erlaubt manuelle Scans und konfigurierbare Intervalle.
+- Manueller Scanner-Trigger im Files-Bereich für Owner/Admin (direktes Anstoßen des CLI-Scans über die UI).
 
 ## Review-Workflow für untracked Dateien
 - Untracked-Ansicht filtert nach Ordner, Dateityp, Größe und Änderungsdatum.
