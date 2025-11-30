@@ -69,7 +69,7 @@
 
 ## Setup & Betrieb
 - Web-Setup unter `/setup.php` konfiguriert DB-Zugang, Branding, Basis-URL und Session-Name; kann einen Admin-User anlegen/reaktivieren und schreibt `includes/config.php`.
-- Beiliegendes DB-Schema in `database/schema.sql` (User, Projekte, Rollen, Entity-Typen, Entities, Assets, Revisionen, File-Inventory); Import via `mysql kumiai_asset_manager < database/schema.sql`.
+- Beiliegendes DB-Schema in `database/schema.sql` (User, Projekte, Rollen, Entity-Typen, Entities, Assets, Revisionen, File-Inventory); Import via `mysql kumiai_asset_manager < database/schema.sql`. Upgrade bestehender Installationen auf den Stand mit Klassifizierungsachsen via `mysql kumiai_asset_manager < database/upgrade_v1_to_v2.sql`.
 - Auth & Rollen über `users` und `project_roles`; Beispiel-Adminanlage per SQL, Passwort-Hash über `password_hash` generierbar.
 - Projektverwaltung und Rollenvergabe über `public/projects.php`.
 - Generische Entities über `public/entities.php` inkl. Anlage von Typen und Entities.

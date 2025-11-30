@@ -129,6 +129,7 @@ Selbstgehostete LAMP-WebApp zur Verwaltung von Kreativprojekten (Manga, Comics, 
 
 ## 14) Setup & Betrieb
 - Web-Setup unter `/setup.php` ausführen, um DB-Zugangsdaten, Studio-/Firmenname (Branding), Basis-URL und Session-Name einzutragen. Optional kann direkt ein Admin-User (E-Mail/Passwort) angelegt bzw. reaktiviert werden. Das Skript schreibt `includes/config.php` und importiert das Schema.
+- Bestehende Installationen auf den Stand mit Entity-First-Klassifizierung und flexiblen Achsen bringen: `mysql <datenbankname> < database/upgrade_v1_to_v2.sql` (fügt `classification_state`, `entity_file_links`, `classification_axes`, `classification_axis_values` und `revision_classifications` hinzu bzw. aktualisiert bestehende Spalten).
 - Läuft auf Standard-PHP/MySQL-Hosting ohne Spezialdienste.
 
 ## 15) Nicht-funktionale Anforderungen
