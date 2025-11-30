@@ -1,6 +1,7 @@
 <?php
 require_once __DIR__ . '/../includes/layout.php';
 require_once __DIR__ . '/../includes/naming.php';
+require_once __DIR__ . '/../includes/files.php';
 require_login();
 
 $message = null;
@@ -23,6 +24,7 @@ if (!$projectRow) {
     render_footer();
     exit;
 }
+$projectRoot = rtrim($projectRow['root_path'], '/');
 $projectContext = null;
 foreach ($projects as $project) {
     if ((int)$project['id'] === $projectId) {
@@ -59,6 +61,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_r
     $useTemplate = isset($_POST['enforce_template']);
     $viewLabel = trim($_POST['view_label'] ?? 'main');
     $manualExtension = trim($_POST['file_extension'] ?? '');
+    $uploadedFile = $_FILES['revision_file'] ?? null;
+    $projectRoot = rtrim($projectRow['root_path'], '/');
+
+    $fileSize = (int)($_POST['file_size_bytes'] ?? 0);
+    $width = null;
+    $height = null;
 
     if ($assetId > 0) {
         $versionStmt = $pdo->prepare('SELECT COALESCE(MAX(version), 0) + 1 AS next_version FROM asset_revisions WHERE asset_id = :asset_id');
@@ -77,35 +85,76 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_r
             ];
         }
 
+        $filePath = sanitize_relative_path($filePath);
+
         if ($useTemplate && $assetContext) {
-            $extension = $manualExtension !== '' ? $manualExtension : ($filePath !== '' ? extension_from_path($filePath) : 'png');
+            $extension = $manualExtension !== '' ? ltrim($manualExtension, '.') : '';
+            if ($extension === '') {
+                $extensionSource = $filePath !== '' ? $filePath : ($uploadedFile['name'] ?? 'png');
+                $extension = ltrim(extension_from_path((string)$extensionSource), '.');
+            }
             $generated = generate_revision_path($projectRow, $assetContext, $entityContext, $nextVersion, $extension, $viewLabel);
             $filePath = $generated['relative_path'];
         }
 
-        if ($filePath !== '') {
-            $stmt = $pdo->prepare('INSERT INTO asset_revisions (asset_id, version, file_path, file_hash, mime_type, file_size_bytes, created_by, created_at, review_status) VALUES (:asset_id, :version, :file_path, :file_hash, :mime_type, :file_size_bytes, :created_by, NOW(), :review_status)');
+        if ($uploadedFile && $uploadedFile['error'] === UPLOAD_ERR_OK) {
+            if ($projectRoot === '') {
+                $error = 'Projekt-Root ist nicht gesetzt, Upload nicht möglich.';
+            } else {
+                $targetPath = $filePath !== '' ? $filePath : '/99_TEMP/' . kumiai_slug(pathinfo($uploadedFile['name'], PATHINFO_FILENAME)) . '.' . extension_from_path($uploadedFile['name']);
+                $targetPath = sanitize_relative_path($targetPath);
+                $targetPath = ensure_unique_path($projectRoot, $targetPath);
+                $destination = $projectRoot . $targetPath;
+                ensure_directory(dirname($destination));
+
+                if (!move_uploaded_file($uploadedFile['tmp_name'], $destination)) {
+                    $error = 'Upload konnte nicht gespeichert werden.';
+                } else {
+                    $filePath = $targetPath;
+                    $meta = collect_file_metadata($destination);
+                    $fileHash = $meta['file_hash'] ?? $fileHash;
+                    $mime = $meta['mime_type'] ?? $mime;
+                    $fileSize = $meta['file_size_bytes'] ?? $fileSize;
+                    $width = $meta['width'];
+                    $height = $meta['height'];
+                    generate_thumbnail($projectId, $filePath, $destination);
+                }
+            }
+        }
+
+        if ($filePath !== '' && !$error) {
+            $ensureUnique = !$uploadedFile || $uploadedFile['error'] !== UPLOAD_ERR_OK;
+            if ($ensureUnique && $projectRoot !== '') {
+                $filePath = ensure_unique_path($projectRoot, $filePath);
+            }
+
+            $stmt = $pdo->prepare('INSERT INTO asset_revisions (asset_id, version, file_path, file_hash, mime_type, file_size_bytes, width, height, created_by, created_at, review_status) VALUES (:asset_id, :version, :file_path, :file_hash, :mime_type, :file_size_bytes, :width, :height, :created_by, NOW(), :review_status)');
             $stmt->execute([
                 'asset_id' => $assetId,
                 'version' => $nextVersion,
                 'file_path' => $filePath,
                 'file_hash' => $fileHash,
                 'mime_type' => $mime,
-                'file_size_bytes' => (int)($_POST['file_size_bytes'] ?? 0),
+                'file_size_bytes' => $fileSize,
+                'width' => $width,
+                'height' => $height,
                 'created_by' => current_user()['id'],
                 'review_status' => $status,
             ]);
-            $inventoryStmt = $pdo->prepare('INSERT INTO file_inventory (project_id, file_path, file_hash, status, asset_revision_id, last_seen_at) VALUES (:project_id, :file_path, :file_hash, :status, :asset_revision_id, NOW()) ON DUPLICATE KEY UPDATE file_hash = VALUES(file_hash), status = VALUES(status), asset_revision_id = VALUES(asset_revision_id), last_seen_at = NOW()');
+            $revisionId = (int)$pdo->lastInsertId();
+            $inventoryStmt = $pdo->prepare('INSERT INTO file_inventory (project_id, file_path, file_hash, status, asset_revision_id, last_seen_at, file_size_bytes, mime_type) VALUES (:project_id, :file_path, :file_hash, :status, :asset_revision_id, NOW(), :file_size_bytes, :mime_type) ON DUPLICATE KEY UPDATE file_hash = VALUES(file_hash), status = VALUES(status), asset_revision_id = VALUES(asset_revision_id), last_seen_at = NOW(), file_size_bytes = VALUES(file_size_bytes), mime_type = VALUES(mime_type)');
             $inventoryStmt->execute([
                 'project_id' => $projectId,
                 'file_path' => $filePath,
                 'file_hash' => $fileHash,
+                'file_size_bytes' => $fileSize,
+                'mime_type' => $mime,
                 'status' => 'linked',
-                'asset_revision_id' => (int)$pdo->lastInsertId(),
+                'asset_revision_id' => $revisionId,
             ]);
-            $message = 'Revision gespeichert und Pfad konsistent nach Template abgelegt.';
-        } else {
-            $error = 'Bitte Dateipfad angeben oder Template nutzen.';
+            $message = 'Revision gespeichert, Datei einsortiert und Metadaten aktualisiert.';
+        } elseif (!$error) {
+            $error = 'Bitte Dateipfad angeben oder Template/Upload nutzen.';
         }
     }
 }
@@ -180,6 +229,16 @@ foreach ($assets as $asset) {
 $revisionsStmt = $pdo->prepare('SELECT r.*, a.name AS asset_name, u.display_name AS reviewed_by_name FROM asset_revisions r JOIN assets a ON a.id = r.asset_id LEFT JOIN users u ON u.id = r.reviewed_by WHERE a.project_id = :project_id ORDER BY r.created_at DESC, r.version DESC LIMIT 50');
 $revisionsStmt->execute(['project_id' => $projectId]);
 $revisions = $revisionsStmt->fetchAll();
+
+$revisionThumbs = [];
+foreach ($revisions as $revision) {
+    $thumb = thumbnail_public_if_exists($projectId, $revision['file_path']);
+    $absolute = $projectRoot . $revision['file_path'];
+    if (!$thumb && $projectRoot !== '' && file_exists($absolute)) {
+        $thumb = generate_thumbnail($projectId, $revision['file_path'], $absolute);
+    }
+    $revisionThumbs[(int)$revision['id']] = $thumb;
+}
 
 render_header('Assets');
 ?>
@@ -282,6 +341,7 @@ render_header('Assets');
                                 <tr>
                                     <th>Asset</th>
                                     <th>Version</th>
+                                    <th>Preview</th>
                                     <th>Datei</th>
                                     <th>Status</th>
                                     <th>Reviewer</th>
@@ -294,6 +354,14 @@ render_header('Assets');
                                     <tr>
                                         <td><?= htmlspecialchars($revision['asset_name']) ?></td>
                                         <td>v<?= (int)$revision['version'] ?></td>
+                                        <td>
+                                            <?php $thumb = $revisionThumbs[(int)$revision['id']] ?? null; ?>
+                                            <?php if ($thumb): ?>
+                                                <img src="<?= htmlspecialchars($thumb) ?>" alt="Thumbnail" class="img-thumbnail" style="max-width: 80px; max-height: 80px;">
+                                            <?php else: ?>
+                                                <span class="text-muted">–</span>
+                                            <?php endif; ?>
+                                        </td>
                                         <td><code><?= htmlspecialchars($revision['file_path']) ?></code></td>
                                         <td>
                                             <span class="badge bg-light text-dark border text-uppercase"><?= htmlspecialchars($revision['review_status']) ?></span>
@@ -329,7 +397,7 @@ render_header('Assets');
         <div class="card shadow-sm">
             <div class="card-body">
                 <h3 class="h6">Revision erfassen</h3>
-                <form method="post">
+                <form method="post" enctype="multipart/form-data">
                     <input type="hidden" name="action" value="add_revision">
                     <div class="mb-3">
                         <label class="form-label" for="asset_id">Asset</label>
@@ -347,6 +415,11 @@ render_header('Assets');
                             <button class="btn btn-outline-secondary" type="button" id="apply_template">Template einsetzen</button>
                         </div>
                         <div class="form-text" id="naming_hint">Pfadvorschlag erscheint nach Asset-Auswahl.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="revision_file">Datei hochladen</label>
+                        <input class="form-control" type="file" name="revision_file" id="revision_file" accept="image/*">
+                        <div class="form-text">Upload wird nach Template abgelegt und in Inventar/Revision eingetragen.</div>
                     </div>
                     <div class="row g-3">
                         <div class="col-md-6">

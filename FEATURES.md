@@ -34,7 +34,7 @@
 
 ## Naming-Templates & Auto-Renaming
 - Projekt- und Asset-Typ-bezogene Templates mit Platzhaltern wie `{project}`, `{project_slug}`, `{entity_type}`, `{entity_slug}`, `{asset_type}`, `{view}`, `{version}`, `{date}`, `{datetime}`, `{ext}`.
-- Renaming-Engine benennt Dateien beim Anlegen/Updaten um, verschiebt sie in Zielordner, aktualisiert DB-Pfade und löst Konflikte über Suffixe oder Fehler.
+- Renaming-Engine benennt Dateien beim Anlegen/Updaten um, verschiebt sie in Zielordner, aktualisiert DB-Pfade, erzeugt Thumbnails und löst Konflikte über Suffixe oder Fehler.
 
 ## Ordnerstruktur & Autosortierung
 - Standardstruktur mit Charakter-, Szenen-, Background-, Concept-, Export- und Temp-Ordnern.
@@ -63,7 +63,7 @@
 - Review-Status einer Revision im Revisions-Panel setzbar (Owner/Admin/Editor) mit Notiz, Reviewer und Zeitstempel.
 - File-Inventory-Workflow via `scripts/scan.php <project_id>` und `public/files.php` zum Markieren, Verknüpfen oder Anlegen neuer Revisionen.
 - Naming-/Folder-Logik mit Default-Templates pro Asset-Typ (Character/Background/Scene/Concept/Other), automatischer Pfadberechnung, Konfliktauflösung per Suffix und optionalem Auto-Move beim Verknüpfen.
-- Deployment: Webroot auf `public/`; PHP-CLI für `scripts/scan.php`; Thumbnails/Uploads im MVP noch nicht integriert.
+- Deployment: Webroot auf `public/`; PHP-CLI für `scripts/scan.php`; Uploads werden im Assets-Formular angenommen, nach Templates einsortiert und mit Thumbnails versehen.
 
 ## Nicht-funktionale Anforderungen
 - Optionales Audit-Logging für kritische Aktionen.

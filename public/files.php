@@ -1,6 +1,7 @@
 <?php
 require_once __DIR__ . '/../includes/layout.php';
 require_once __DIR__ . '/../includes/naming.php';
+require_once __DIR__ . '/../includes/files.php';
 require_login();
 
 $message = null;
@@ -58,11 +59,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'link_
             ];
         }
 
-        $targetPath = $file['file_path'];
+        $targetPath = sanitize_relative_path($file['file_path']);
+        $meta = collect_file_metadata($projectRoot . $file['file_path']);
         if ($applyTemplate && $asset) {
-            $extension = $manualExtension !== '' ? $manualExtension : extension_from_path($file['file_path']);
+            $extension = $manualExtension !== '' ? ltrim($manualExtension, '.') : extension_from_path($file['file_path']);
             $generated = generate_revision_path($projectRow, $asset, $entityContext, $nextVersion, $extension, $viewLabel);
-            $targetPath = $generated['relative_path'];
+            $targetPath = sanitize_relative_path($generated['relative_path']);
             $source = $projectRoot . $file['file_path'];
             $destination = $projectRoot . $targetPath;
             $finalTarget = $targetPath;
@@ -74,27 +76,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'link_
                 if (!@rename($source, $destination)) {
                     $error = 'Datei konnte nicht in den Zielordner verschoben werden. Pfad bleibt unverändert.';
                     $finalTarget = $file['file_path'];
+                } else {
+                    $meta = collect_file_metadata($destination);
+                    generate_thumbnail($projectId, $finalTarget, $destination);
                 }
-            } else {
-                $finalTarget = $targetPath;
             }
             $targetPath = $finalTarget;
         }
 
-        $revStmt = $pdo->prepare('INSERT INTO asset_revisions (asset_id, version, file_path, file_hash, mime_type, file_size_bytes, created_by, created_at, review_status) VALUES (:asset_id, :version, :file_path, :file_hash, :mime_type, :file_size_bytes, :created_by, NOW(), "pending")');
+        $revStmt = $pdo->prepare('INSERT INTO asset_revisions (asset_id, version, file_path, file_hash, mime_type, file_size_bytes, width, height, created_by, created_at, review_status) VALUES (:asset_id, :version, :file_path, :file_hash, :mime_type, :file_size_bytes, :width, :height, :created_by, NOW(), "pending")');
         $revStmt->execute([
             'asset_id' => $assetId,
             'version' => $nextVersion,
             'file_path' => $targetPath,
-            'file_hash' => $file['file_hash'],
-            'mime_type' => $file['mime_type'] ?? 'application/octet-stream',
-            'file_size_bytes' => $file['file_size_bytes'] ?? 0,
+            'file_hash' => $meta['file_hash'] ?? $file['file_hash'],
+            'mime_type' => $meta['mime_type'] ?? ($file['mime_type'] ?? 'application/octet-stream'),
+            'file_size_bytes' => $meta['file_size_bytes'] ?? ($file['file_size_bytes'] ?? 0),
+            'width' => $meta['width'],
+            'height' => $meta['height'],
             'created_by' => current_user()['id'],
         ]);
         $revisionId = (int)$pdo->lastInsertId();
-        $updateInventory = $pdo->prepare('UPDATE file_inventory SET status = "linked", asset_revision_id = :revision_id, file_path = :file_path, last_seen_at = NOW() WHERE id = :id');
-        $updateInventory->execute(['revision_id' => $revisionId, 'file_path' => $targetPath, 'id' => $inventoryId]);
-        $message = $message ?: 'Datei verknüpft und nach Template einsortiert.';
+        $updateInventory = $pdo->prepare('UPDATE file_inventory SET status = "linked", asset_revision_id = :revision_id, file_path = :file_path, file_hash = :file_hash, mime_type = :mime_type, file_size_bytes = :file_size_bytes, last_seen_at = NOW() WHERE id = :id');
+        $updateInventory->execute([
+            'revision_id' => $revisionId,
+            'file_path' => $targetPath,
+            'file_hash' => $meta['file_hash'] ?? $file['file_hash'],
+            'mime_type' => $meta['mime_type'] ?? ($file['mime_type'] ?? 'application/octet-stream'),
+            'file_size_bytes' => $meta['file_size_bytes'] ?? ($file['file_size_bytes'] ?? 0),
+            'id' => $inventoryId,
+        ]);
+        $message = $message ?: 'Datei verknüpft, einsortiert und Metadaten aktualisiert.';
     }
 }
 
