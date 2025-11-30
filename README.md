@@ -43,11 +43,14 @@ Selbstgehostete LAMP-WebApp zur Verwaltung von Kreativprojekten (Manga, Comics, 
 
 ## 6) Assets, Versionen & Datei-Bezug
 ### 6.1 Assets
-- Felder: project_id, Name, Asset-Typ (z. B. character_ref, background, scene_frame, concept, other), primäre Entity, optionale zusätzliche Entity-Links (Join-Tabelle), Status (`active`, `deprecated`, `archived`), Beschreibung, erstellt_von/erstellt_am.
+- Felder: project_id, **asset_key** (deterministisch aus Entity-Slug + Achsen), optionaler display_name (frei editierbar), Asset-Typ (z. B. character_ref, background, scene_frame, concept, other), primäre Entity, optionale zusätzliche Entity-Links (Join-Tabelle), Status (`active`, `deprecated`, `archived`), Beschreibung, erstellt_von/erstellt_am.
+- asset_key wird aus Entity + klassifizierten Achsenwerten generiert; existiert die Kombination bereits, wird sie wiederverwendet, andernfalls entsteht ein neues Asset. Assets ohne Achsen nutzen `{entity_slug}_misc_{id}` als Fallback.
 
 ### 6.2 Asset-Revisions
 - Jede Datei-Version ist eine Revision.
 - Felder: asset_id, version (auto-increment pro Asset), relativer `file_path`, `file_hash`, MIME-Type, width, height, file_size_bytes, created_by/created_at, Review-Status (`pending`, `approved`, `rejected`), reviewed_by/at, Kommentar.
+- Klassifikationen liegen sowohl auf Asset-Ebene (`asset_classifications`) als auch gespiegelt je Revision (`revision_classifications`), damit alle Versionen die gleiche Achsenkombination teilen.
+- Dateinamen folgen `{asset_key}_v{version}.{ext}` und bleiben damit konsistent maschinenlesbar.
 
 ### 6.3 Revision-Logik
 - Version hochzählen pro Asset.
@@ -123,13 +126,15 @@ Selbstgehostete LAMP-WebApp zur Verwaltung von Kreativprojekten (Manga, Comics, 
 - **Entity-Ansicht „Unklassifizierte Dateien“:** Jede Entity zeigt ihre `entity_only`-Dateien, die gesammelt oder einzeln weiter klassifiziert werden können. Die Seite `/entity_files.php` erlaubt Preview, Mehrfachauswahl sowie Klassifizierung und Asset-Anlage in einem Schritt.
 - **Schrittweise Klassifizierung:** Optional nacheinander Outfit → Pose → View/Angle. Nach jedem Schritt wird `classification_state` logisch abgeleitet (`entity_only` → `outfit_assigned` → `pose_assigned` → `view_assigned` → `fully_classified`).
 - **On-the-fly-Assets:** Beim Klassifizieren können neue Assets (z. B. Outfit „Schuluniform Sommer“, Pose „T-Pose“) angelegt werden; die aktuelle Revision wird automatisch verknüpft, umbenannt und einsortiert.
-- **Naming-Engine:** Templates unterstützen `{character_slug}`, `{outfit}`, `{pose}`, `{view}`, `{version}`, `{ext}`. Auswertung erfolgt erst, wenn alle notwendigen Achsen gesetzt sind, damit Turnarounds/Layout-Serien konsistent benannt werden.
+- **Deterministische Asset-Erzeugung:** Kombiniert Entity-Slug mit der konfigurierten Achsen-Reihenfolge zu einem `asset_key`; existiert die Kombination, wird automatisch eine neue Revision angelegt, ansonsten ein neues Asset inklusive `asset_classifications` (Fallback `{entity_slug}_misc_{id}` ohne Achsen).
+- **Naming-Engine:** Templates unterstützen `{asset_key}`, `{character_slug}`, `{outfit}`, `{pose}`, `{view}`, `{version}`, `{ext}`. Auswertung erfolgt erst, wenn alle notwendigen Achsen gesetzt sind, damit Turnarounds/Layout-Serien konsistent benannt werden und Dateien als `{asset_key}_v{version}.{ext}` abgelegt werden.
 - **Flexible Classification Axes:** Achsen sind konfigurierbar über `classification_axes` (Key, Label, applies_to wie `character`, `location`, `scene`, optional vordefinierte Werte). Werte liegen in `classification_axis_values`. Jede Revision erhält ihre Zuordnung in `revision_classifications` (axis_id + value_key). Die UI zeigt Achsen dynamisch je Entity-Typ (z. B. Outfit/Pose/View für Characters, TimeOfDay/Weather/CameraAngle für Locations), Filter greifen automatisch auf diese Achsen zu.
 - **Verwaltung der Classification Axes:** In `entities.php` lassen sich Achsen und optionale Werte ohne Code-Änderung pflegen; die Entity-First-Ansicht bindet diese Achsen sofort in die Schritt-für-Schritt-Klassifizierung ein.
 
 ## 14) Setup & Betrieb
 - Web-Setup unter `/setup.php` ausführen, um DB-Zugangsdaten, Studio-/Firmenname (Branding), Basis-URL und Session-Name einzutragen. Optional kann direkt ein Admin-User (E-Mail/Passwort) angelegt bzw. reaktiviert werden. Das Skript schreibt `includes/config.php` und importiert das Schema.
 - Bestehende Installationen auf den Stand mit Entity-First-Klassifizierung und flexiblen Achsen bringen: `mysql <datenbankname> < database/upgrade_v1_to_v2.sql` (fügt `classification_state`, `entity_file_links`, `classification_axes`, `classification_axis_values` und `revision_classifications` hinzu bzw. aktualisiert bestehende Spalten).
+- Upgrade für deterministische Asset-Keys und Asset-Klassifikationen: `mysql <datenbankname> < database/upgrade_v2_to_v3.sql` (fügt `asset_key`, `display_name`, `asset_classifications` hinzu und hinterlegt einen eindeutigen Key pro Projekt).
 - Läuft auf Standard-PHP/MySQL-Hosting ohne Spezialdienste.
 
 ## 15) Nicht-funktionale Anforderungen

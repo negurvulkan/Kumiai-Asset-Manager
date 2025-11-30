@@ -23,23 +23,23 @@ function default_naming_rules(): array
     return [
         'character_ref' => [
             'folder' => '/01_CHARACTER/{entity_slug}/reference',
-            'template' => '{asset_slug}_{view}_v{version}.{ext}',
+            'template' => '{asset_key}_v{version}.{ext}',
         ],
         'background' => [
             'folder' => '/03_BACKGROUNDS/{entity_slug}',
-            'template' => '{asset_slug}_v{version}.{ext}',
+            'template' => '{asset_key}_v{version}.{ext}',
         ],
         'scene_frame' => [
             'folder' => '/02_SCENES/{entity_slug}',
-            'template' => '{asset_slug}_{view}_v{version}.{ext}',
+            'template' => '{asset_key}_v{version}.{ext}',
         ],
         'concept' => [
             'folder' => '/04_CONCEPT_ART',
-            'template' => '{project_slug}_{asset_slug}_{view}_v{version}.{ext}',
+            'template' => '{project_slug}_{asset_key}_v{version}.{ext}',
         ],
         'other' => [
             'folder' => '/99_TEMP',
-            'template' => '{project_slug}_{asset_slug}_v{version}.{ext}',
+            'template' => '{project_slug}_{asset_key}_v{version}.{ext}',
         ],
     ];
 }
@@ -54,9 +54,11 @@ function naming_placeholder_context(array $project, array $asset, ?array $entity
 {
     $entitySlug = $entity['slug'] ?? ($entity['name'] ?? null);
     $entitySlug = $entitySlug ? kumiai_slug($entitySlug) : 'unassigned';
-    $assetSlug = kumiai_slug($asset['name'] ?? 'asset');
+    $assetSlug = kumiai_slug($asset['asset_key'] ?? ($asset['name'] ?? 'asset'));
     $projectSlug = $project['slug'] ?? kumiai_slug($project['name'] ?? 'project');
     $classification = array_change_key_case($classification, CASE_LOWER);
+
+    $assetKey = $asset['asset_key'] ?? $assetSlug;
 
     return [
         'project' => $project['name'] ?? 'Project',
@@ -67,11 +69,12 @@ function naming_placeholder_context(array $project, array $asset, ?array $entity
         'asset_type' => $asset['asset_type'] ?? 'other',
         'asset_name' => $asset['name'] ?? '',
         'asset_slug' => $assetSlug,
+        'asset_key' => $assetKey,
         'view' => kumiai_slug($classification['view'] ?? $view ?: 'main'),
         'pose' => kumiai_slug($classification['pose'] ?? ''),
         'outfit' => kumiai_slug($classification['outfit'] ?? ''),
         'character_slug' => $entity && ($entity['type'] ?? '') === 'character' ? $entitySlug : $entitySlug,
-        'version' => str_pad((string)$version, 2, '0', STR_PAD_LEFT),
+        'version' => (string)$version,
         'date' => date('Ymd'),
         'datetime' => date('Ymd_His'),
         'ext' => ltrim($extension, '.'),

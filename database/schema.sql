@@ -52,6 +52,8 @@ CREATE TABLE assets (
     id INT AUTO_INCREMENT PRIMARY KEY,
     project_id INT NOT NULL,
     name VARCHAR(255) NOT NULL,
+    asset_key VARCHAR(255) NOT NULL,
+    display_name VARCHAR(255) NULL,
     asset_type VARCHAR(100) NOT NULL,
     primary_entity_id INT NULL,
     description TEXT,
@@ -60,7 +62,8 @@ CREATE TABLE assets (
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
     FOREIGN KEY (primary_entity_id) REFERENCES entities(id) ON DELETE SET NULL,
-    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+    UNIQUE KEY uniq_asset_key (project_id, asset_key)
 );
 
 CREATE TABLE asset_entities (
@@ -146,5 +149,14 @@ CREATE TABLE revision_classifications (
     value_key VARCHAR(100) NOT NULL,
     PRIMARY KEY (revision_id, axis_id),
     FOREIGN KEY (revision_id) REFERENCES asset_revisions(id) ON DELETE CASCADE,
+    FOREIGN KEY (axis_id) REFERENCES classification_axes(id) ON DELETE CASCADE
+);
+
+CREATE TABLE asset_classifications (
+    asset_id INT NOT NULL,
+    axis_id INT NOT NULL,
+    value_key VARCHAR(100) NOT NULL,
+    PRIMARY KEY (asset_id, axis_id),
+    FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE,
     FOREIGN KEY (axis_id) REFERENCES classification_axes(id) ON DELETE CASCADE
 );
