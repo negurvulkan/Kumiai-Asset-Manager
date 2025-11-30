@@ -49,6 +49,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_a
             'description' => $description,
             'created_by' => current_user()['id'],
         ]);
+        $message = 'Asset angelegt.';
+    }
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'update_asset') {
+    $assetId = (int)($_POST['asset_id'] ?? 0);
+    $name = trim($_POST['asset_name'] ?? '');
+    $type = trim($_POST['asset_type'] ?? 'other');
+    $primaryEntityId = (int)($_POST['primary_entity_id'] ?? 0);
+    $description = trim($_POST['asset_description'] ?? '');
+    $status = trim($_POST['asset_status'] ?? 'active');
+    $validStatus = ['active', 'deprecated', 'archived'];
+
+    if ($assetId > 0 && $name !== '' && in_array($status, $validStatus, true)) {
+        $stmt = $pdo->prepare('UPDATE assets SET name = :name, asset_type = :asset_type, primary_entity_id = :primary_entity_id, description = :description, status = :status WHERE id = :id AND project_id = :project_id');
+        $stmt->execute([
+            'name' => $name,
+            'asset_type' => $type,
+            'primary_entity_id' => $primaryEntityId ?: null,
+            'description' => $description,
+            'status' => $status,
+            'id' => $assetId,
+            'project_id' => $projectId,
+        ]);
+        if ($stmt->rowCount() > 0) {
+            $message = 'Asset aktualisiert.';
+        } else {
+            $error = 'Asset nicht gefunden.';
+        }
     }
 }
 
@@ -308,6 +337,60 @@ render_header('Assets');
                 <?php endif; ?>
             </div>
         </div>
+        <?php if (!empty($assets)): ?>
+        <div class="card shadow-sm mb-3">
+            <div class="card-body">
+                <h3 class="h6">Asset bearbeiten</h3>
+                <form method="post" id="edit_asset_form">
+                    <input type="hidden" name="action" value="update_asset">
+                    <div class="mb-3">
+                        <label class="form-label" for="edit_asset_id">Asset wählen</label>
+                        <select class="form-select" name="asset_id" id="edit_asset_id" required>
+                            <?php foreach ($assets as $asset): ?>
+                                <option value="<?= (int)$asset['id'] ?>"><?= htmlspecialchars($asset['name']) ?> (<?= htmlspecialchars($asset['asset_type']) ?>)</option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="edit_asset_name">Name</label>
+                        <input class="form-control" name="asset_name" id="edit_asset_name" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="edit_asset_type">Typ</label>
+                        <select class="form-select" name="asset_type" id="edit_asset_type">
+                            <option value="character_ref">character_ref</option>
+                            <option value="background">background</option>
+                            <option value="scene_frame">scene_frame</option>
+                            <option value="concept">concept</option>
+                            <option value="other">other</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="edit_primary_entity_id">Primäre Entity</label>
+                        <select class="form-select" name="primary_entity_id" id="edit_primary_entity_id">
+                            <option value="">Keine</option>
+                            <?php foreach ($entities as $entity): ?>
+                                <option value="<?= (int)$entity['id'] ?>"><?= htmlspecialchars($entity['name']) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="edit_asset_description">Beschreibung</label>
+                        <textarea class="form-control" name="asset_description" id="edit_asset_description" rows="2"></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="edit_asset_status">Status</label>
+                        <select class="form-select" name="asset_status" id="edit_asset_status">
+                            <option value="active">active</option>
+                            <option value="deprecated">deprecated</option>
+                            <option value="archived">archived</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-primary" type="submit">Änderungen speichern</button>
+                </form>
+            </div>
+        </div>
+        <?php endif; ?>
         <div class="card shadow-sm">
             <div class="card-body">
                 <h3 class="h6">Neues Asset</h3>
@@ -489,6 +572,44 @@ render_header('Assets');
         </div>
     </div>
 </div>
+<script>
+(function() {
+    const assetForm = document.getElementById('edit_asset_form');
+    if (!assetForm) return;
+
+    const assetMap = <?= json_encode(array_reduce($assets, function ($carry, $asset) {
+        $carry[(int)$asset['id']] = [
+            'name' => $asset['name'],
+            'asset_type' => $asset['asset_type'],
+            'primary_entity_id' => $asset['primary_entity_id'] ? (int)$asset['primary_entity_id'] : '',
+            'description' => $asset['description'] ?? '',
+            'status' => $asset['status'] ?? 'active',
+        ];
+        return $carry;
+    }, [])) ?>;
+
+    const select = document.getElementById('edit_asset_id');
+    const nameInput = document.getElementById('edit_asset_name');
+    const typeSelect = document.getElementById('edit_asset_type');
+    const entitySelect = document.getElementById('edit_primary_entity_id');
+    const descInput = document.getElementById('edit_asset_description');
+    const statusSelect = document.getElementById('edit_asset_status');
+
+    const fillForm = () => {
+        const assetId = select.value;
+        const data = assetMap[assetId];
+        if (!data) return;
+        nameInput.value = data.name || '';
+        typeSelect.value = data.asset_type || 'other';
+        entitySelect.value = data.primary_entity_id || '';
+        descInput.value = data.description || '';
+        statusSelect.value = data.status || 'active';
+    };
+
+    select.addEventListener('change', fillForm);
+    fillForm();
+})();
+</script>
 <script>
 (function() {
     const hintMap = <?= json_encode($namingHints) ?>;

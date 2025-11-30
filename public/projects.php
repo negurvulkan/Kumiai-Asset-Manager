@@ -6,6 +6,10 @@ require_login();
 $message = null;
 $error = null;
 
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['project_id'])) {
+    $_GET['project_id'] = (int)$_POST['project_id'];
+}
+
 function findProject(array $projects, int $projectId): ?array
 {
     foreach ($projects as $project) {
@@ -45,6 +49,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $pdo->commit();
             $message = 'Projekt wurde angelegt und Sie sind nun Owner.';
             $_GET['project_id'] = $newProjectId;
+        }
+    }
+
+    if (($_POST['action'] ?? '') === 'update_project') {
+        $targetProjectId = (int)($_POST['project_id'] ?? 0);
+        $name = trim($_POST['name'] ?? '');
+        $slug = trim($_POST['slug'] ?? '');
+        $rootPath = trim($_POST['root_path'] ?? '');
+        $description = trim($_POST['description'] ?? '');
+        $projects = user_projects($pdo);
+        $projectContext = findProject($projects, $targetProjectId);
+
+        if (!$projectContext || !user_can_manage_project($projectContext)) {
+            $error = 'Keine Berechtigung für dieses Projekt.';
+        } elseif ($name === '' || $slug === '' || $rootPath === '') {
+            $error = 'Name, Slug und Root-Pfad sind Pflichtfelder.';
+        } else {
+            $stmt = $pdo->prepare('UPDATE projects SET name = :name, slug = :slug, description = :description, root_path = :root_path WHERE id = :id');
+            $stmt->execute([
+                'name' => $name,
+                'slug' => $slug,
+                'description' => $description,
+                'root_path' => $rootPath,
+                'id' => $targetProjectId,
+            ]);
+            $message = 'Projekt aktualisiert.';
         }
     }
 
@@ -167,6 +197,34 @@ render_header('Projects');
                     <dt class="col-sm-4">Root</dt><dd class="col-sm-8"><code><?= htmlspecialchars($projectDetails['root_path']) ?></code></dd>
                     <dt class="col-sm-4">Rolle</dt><dd class="col-sm-8"><?= htmlspecialchars($projectDetails['role'] ?? 'n/a') ?></dd>
                 </dl>
+                <?php if ($canManage): ?>
+                    <div class="border rounded p-3 mb-3 bg-light">
+                        <h3 class="h6">Projekt bearbeiten</h3>
+                        <form method="post" class="row g-3">
+                            <input type="hidden" name="action" value="update_project">
+                            <input type="hidden" name="project_id" value="<?= (int)$projectDetails['id'] ?>">
+                            <div class="col-md-6">
+                                <label class="form-label" for="edit_name">Name</label>
+                                <input class="form-control" id="edit_name" name="name" value="<?= htmlspecialchars($projectDetails['name']) ?>" required>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label" for="edit_slug">Slug</label>
+                                <input class="form-control" id="edit_slug" name="slug" value="<?= htmlspecialchars($projectDetails['slug']) ?>" required>
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label" for="edit_root">Root-Pfad</label>
+                                <input class="form-control" id="edit_root" name="root_path" value="<?= htmlspecialchars($projectDetails['root_path']) ?>" required>
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label" for="edit_description">Beschreibung</label>
+                                <textarea class="form-control" id="edit_description" name="description" rows="2"><?= htmlspecialchars($projectDetails['description'] ?? '') ?></textarea>
+                            </div>
+                            <div class="col-12">
+                                <button class="btn btn-primary" type="submit">Änderungen speichern</button>
+                            </div>
+                        </form>
+                    </div>
+                <?php endif; ?>
                 <h3 class="h6">Entity-Typen</h3>
                 <?php if (empty($projectDetails['entity_types'])): ?>
                     <p class="text-muted">Noch keine Entity-Typen angelegt.</p>
