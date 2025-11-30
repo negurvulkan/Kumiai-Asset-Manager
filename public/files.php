@@ -84,6 +84,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'link_
             $targetPath = $finalTarget;
         }
 
+        $absoluteFinal = $projectRoot . $targetPath;
+        if ($projectRoot !== '' && file_exists($absoluteFinal)) {
+            $meta = collect_file_metadata($absoluteFinal);
+            generate_thumbnail($projectId, $targetPath, $absoluteFinal);
+        }
+
         $revStmt = $pdo->prepare('INSERT INTO asset_revisions (asset_id, version, file_path, file_hash, mime_type, file_size_bytes, width, height, created_by, created_at, review_status) VALUES (:asset_id, :version, :file_path, :file_hash, :mime_type, :file_size_bytes, :width, :height, :created_by, NOW(), "pending")');
         $revStmt->execute([
             'asset_id' => $assetId,

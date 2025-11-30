@@ -87,14 +87,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_r
 
         $filePath = sanitize_relative_path($filePath);
 
-        if ($useTemplate && $assetContext) {
+        if ($assetContext) {
             $extension = $manualExtension !== '' ? ltrim($manualExtension, '.') : '';
             if ($extension === '') {
                 $extensionSource = $filePath !== '' ? $filePath : ($uploadedFile['name'] ?? 'png');
                 $extension = ltrim(extension_from_path((string)$extensionSource), '.');
             }
-            $generated = generate_revision_path($projectRow, $assetContext, $entityContext, $nextVersion, $extension, $viewLabel);
-            $filePath = $generated['relative_path'];
+
+            if ($useTemplate || $filePath === '') {
+                $generated = generate_revision_path($projectRow, $assetContext, $entityContext, $nextVersion, $extension, $viewLabel);
+                $filePath = $generated['relative_path'];
+            }
         }
 
         if ($uploadedFile && $uploadedFile['error'] === UPLOAD_ERR_OK) {
@@ -125,7 +128,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_r
         if ($filePath !== '' && !$error) {
             $ensureUnique = !$uploadedFile || $uploadedFile['error'] !== UPLOAD_ERR_OK;
             if ($ensureUnique && $projectRoot !== '') {
-                $filePath = ensure_unique_path($projectRoot, $filePath);
+                $absoluteCandidate = $projectRoot . $filePath;
+                if (!file_exists($absoluteCandidate)) {
+                    $filePath = ensure_unique_path($projectRoot, $filePath);
+                }
+            }
+
+            $absoluteExisting = $projectRoot . $filePath;
+            if ($projectRoot !== '' && file_exists($absoluteExisting)) {
+                $meta = collect_file_metadata($absoluteExisting);
+                $fileHash = $meta['file_hash'] ?? $fileHash;
+                $mime = $meta['mime_type'] ?? $mime;
+                $fileSize = $meta['file_size_bytes'] ?? $fileSize;
+                $width = $meta['width'];
+                $height = $meta['height'];
+                generate_thumbnail($projectId, $filePath, $absoluteExisting);
             }
 
             $stmt = $pdo->prepare('INSERT INTO asset_revisions (asset_id, version, file_path, file_hash, mime_type, file_size_bytes, width, height, created_by, created_at, review_status) VALUES (:asset_id, :version, :file_path, :file_hash, :mime_type, :file_size_bytes, :width, :height, :created_by, NOW(), :review_status)');

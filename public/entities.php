@@ -2,6 +2,9 @@
 require_once __DIR__ . '/../includes/layout.php';
 require_login();
 
+$message = null;
+$error = null;
+
 $projects = user_projects($pdo);
 if (empty($projects)) {
     render_header('Entities');
@@ -18,6 +21,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_t
     if ($name !== '') {
         $stmt = $pdo->prepare('INSERT INTO entity_types (project_id, name, description, created_at) VALUES (:project_id, :name, :description, NOW())');
         $stmt->execute(['project_id' => $projectId, 'name' => $name, 'description' => $description]);
+        $message = 'Entity-Typ gespeichert.';
     }
 }
 
@@ -26,7 +30,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_e
     $slug = trim($_POST['entity_slug'] ?? '');
     $description = trim($_POST['entity_description'] ?? '');
     $typeId = (int)($_POST['type_id'] ?? 0);
-    if ($name !== '' && $typeId > 0) {
+    $metadataInput = trim($_POST['metadata_json'] ?? '');
+    $metadataJson = '{}';
+    if ($metadataInput !== '') {
+        $decoded = json_decode($metadataInput, true);
+        if ($decoded === null && json_last_error() !== JSON_ERROR_NONE) {
+            $error = 'Metadata-JSON ist ungültig.';
+        } else {
+            $metadataJson = json_encode($decoded, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        }
+    }
+
+    if (!$error && $name !== '' && $typeId > 0) {
         $stmt = $pdo->prepare('INSERT INTO entities (project_id, type_id, name, slug, description, metadata_json, created_at) VALUES (:project_id, :type_id, :name, :slug, :description, :metadata_json, NOW())');
         $stmt->execute([
             'project_id' => $projectId,
@@ -34,8 +49,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_e
             'name' => $name,
             'slug' => $slug,
             'description' => $description,
-            'metadata_json' => '{}',
+            'metadata_json' => $metadataJson,
         ]);
+        $message = 'Entity angelegt und Metadaten gespeichert.';
     }
 }
 
@@ -63,6 +79,8 @@ render_header('Entities');
         </select>
     </form>
 </div>
+<?php if ($message): ?><div class="alert alert-success"><?= htmlspecialchars($message) ?></div><?php endif; ?>
+<?php if ($error): ?><div class="alert alert-danger"><?= htmlspecialchars($error) ?></div><?php endif; ?>
 <div class="row g-4">
     <div class="col-md-6">
         <div class="card shadow-sm mb-3">
@@ -117,6 +135,7 @@ render_header('Entities');
                                     <th>Name</th>
                                     <th>Slug</th>
                                     <th>Typ</th>
+                                    <th>Metadata</th>
                                     <th>Erstellt</th>
                                 </tr>
                             </thead>
@@ -126,6 +145,7 @@ render_header('Entities');
                                         <td><?= htmlspecialchars($entity['name']) ?></td>
                                         <td><code><?= htmlspecialchars($entity['slug']) ?></code></td>
                                         <td><?= htmlspecialchars($entity['type_name']) ?></td>
+                                        <td class="small"><pre class="mb-0 bg-light p-2 border rounded" style="max-width: 320px; white-space: pre-wrap; word-break: break-word;"><?= htmlspecialchars($entity['metadata_json'] ?: '{}') ?></pre></td>
                                         <td><?= htmlspecialchars($entity['created_at']) ?></td>
                                     </tr>
                                 <?php endforeach; ?>
@@ -160,6 +180,11 @@ render_header('Entities');
                     <div class="mb-3">
                         <label class="form-label" for="entity_description">Beschreibung</label>
                         <textarea class="form-control" name="entity_description" id="entity_description" rows="2"></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="metadata_json">Metadata (JSON)</label>
+                        <textarea class="form-control" name="metadata_json" id="metadata_json" rows="3" placeholder='{"mood":"calm","age":18}'></textarea>
+                        <div class="form-text">Beliebige strukturierte Zusatzinfos als JSON-Objekt.</div>
                     </div>
                     <button class="btn btn-primary" type="submit">Anlegen</button>
                 </form>
