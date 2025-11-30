@@ -1,6 +1,11 @@
 <?php
 require_once __DIR__ . '/../includes/layout.php';
+require_once __DIR__ . '/../includes/naming.php';
+require_once __DIR__ . '/../includes/files.php';
 require_login();
+
+$message = null;
+$error = null;
 
 $projects = user_projects($pdo);
 if (empty($projects)) {
@@ -10,16 +15,30 @@ if (empty($projects)) {
     exit;
 }
 $projectId = isset($_GET['project_id']) ? (int)$_GET['project_id'] : (int)$projects[0]['id'];
+$projectStmt = $pdo->prepare('SELECT * FROM projects WHERE id = :id');
+$projectStmt->execute(['id' => $projectId]);
+$projectRow = $projectStmt->fetch();
+if (!$projectRow) {
+    render_header('Files');
+    echo '<div class="alert alert-danger">Projekt nicht gefunden.</div>';
+    render_footer();
+    exit;
+}
+$projectRoot = rtrim($projectRow['root_path'], '/');
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'mark_orphan') {
     $inventoryId = (int)($_POST['inventory_id'] ?? 0);
     $stmt = $pdo->prepare('UPDATE file_inventory SET status = "orphaned" WHERE id = :id AND project_id = :project_id');
     $stmt->execute(['id' => $inventoryId, 'project_id' => $projectId]);
+    $message = 'Datei als orphaned markiert.';
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'link_asset') {
     $inventoryId = (int)($_POST['inventory_id'] ?? 0);
     $assetId = (int)($_POST['asset_id'] ?? 0);
+    $viewLabel = trim($_POST['view_label'] ?? 'scan');
+    $manualExtension = trim($_POST['file_extension'] ?? '');
+    $applyTemplate = isset($_POST['apply_template']);
     $stmt = $pdo->prepare('SELECT * FROM file_inventory WHERE id = :id AND project_id = :project_id');
     $stmt->execute(['id' => $inventoryId, 'project_id' => $projectId]);
     $file = $stmt->fetch();
@@ -27,19 +46,67 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'link_
         $versionStmt = $pdo->prepare('SELECT COALESCE(MAX(version), 0) + 1 AS next_version FROM asset_revisions WHERE asset_id = :asset_id');
         $versionStmt->execute(['asset_id' => $assetId]);
         $nextVersion = (int)$versionStmt->fetchColumn();
-        $revStmt = $pdo->prepare('INSERT INTO asset_revisions (asset_id, version, file_path, file_hash, mime_type, file_size_bytes, created_by, created_at, review_status) VALUES (:asset_id, :version, :file_path, :file_hash, :mime_type, :file_size_bytes, :created_by, NOW(), "pending")');
+        $assetStmt = $pdo->prepare('SELECT a.*, e.name AS primary_entity_name, e.slug AS primary_entity_slug, et.name AS primary_entity_type FROM assets a LEFT JOIN entities e ON a.primary_entity_id = e.id LEFT JOIN entity_types et ON e.type_id = et.id WHERE a.id = :id AND a.project_id = :project_id');
+        $assetStmt->execute(['id' => $assetId, 'project_id' => $projectId]);
+        $asset = $assetStmt->fetch();
+        $entityContext = null;
+        if ($asset && $asset['primary_entity_id']) {
+            $entityContext = [
+                'id' => $asset['primary_entity_id'],
+                'name' => $asset['primary_entity_name'],
+                'slug' => $asset['primary_entity_slug'],
+                'type' => $asset['primary_entity_type'],
+            ];
+        }
+
+        $targetPath = sanitize_relative_path($file['file_path']);
+        $meta = collect_file_metadata($projectRoot . $file['file_path']);
+        if ($applyTemplate && $asset) {
+            $extension = $manualExtension !== '' ? ltrim($manualExtension, '.') : extension_from_path($file['file_path']);
+            $generated = generate_revision_path($projectRow, $asset, $entityContext, $nextVersion, $extension, $viewLabel);
+            $targetPath = sanitize_relative_path($generated['relative_path']);
+            $source = $projectRoot . $file['file_path'];
+            $destination = $projectRoot . $targetPath;
+            $finalTarget = $targetPath;
+            if ($projectRoot !== '' && file_exists($source)) {
+                ensure_directory(dirname($destination));
+                $finalTarget = ensure_unique_path($projectRoot, $targetPath);
+                $destination = $projectRoot . $finalTarget;
+                ensure_directory(dirname($destination));
+                if (!@rename($source, $destination)) {
+                    $error = 'Datei konnte nicht in den Zielordner verschoben werden. Pfad bleibt unverändert.';
+                    $finalTarget = $file['file_path'];
+                } else {
+                    $meta = collect_file_metadata($destination);
+                    generate_thumbnail($projectId, $finalTarget, $destination);
+                }
+            }
+            $targetPath = $finalTarget;
+        }
+
+        $revStmt = $pdo->prepare('INSERT INTO asset_revisions (asset_id, version, file_path, file_hash, mime_type, file_size_bytes, width, height, created_by, created_at, review_status) VALUES (:asset_id, :version, :file_path, :file_hash, :mime_type, :file_size_bytes, :width, :height, :created_by, NOW(), "pending")');
         $revStmt->execute([
             'asset_id' => $assetId,
             'version' => $nextVersion,
-            'file_path' => $file['file_path'],
-            'file_hash' => $file['file_hash'],
-            'mime_type' => $file['mime_type'] ?? 'application/octet-stream',
-            'file_size_bytes' => $file['file_size_bytes'] ?? 0,
+            'file_path' => $targetPath,
+            'file_hash' => $meta['file_hash'] ?? $file['file_hash'],
+            'mime_type' => $meta['mime_type'] ?? ($file['mime_type'] ?? 'application/octet-stream'),
+            'file_size_bytes' => $meta['file_size_bytes'] ?? ($file['file_size_bytes'] ?? 0),
+            'width' => $meta['width'],
+            'height' => $meta['height'],
             'created_by' => current_user()['id'],
         ]);
         $revisionId = (int)$pdo->lastInsertId();
-        $updateInventory = $pdo->prepare('UPDATE file_inventory SET status = "linked", asset_revision_id = :revision_id, last_seen_at = NOW() WHERE id = :id');
-        $updateInventory->execute(['revision_id' => $revisionId, 'id' => $inventoryId]);
+        $updateInventory = $pdo->prepare('UPDATE file_inventory SET status = "linked", asset_revision_id = :revision_id, file_path = :file_path, file_hash = :file_hash, mime_type = :mime_type, file_size_bytes = :file_size_bytes, last_seen_at = NOW() WHERE id = :id');
+        $updateInventory->execute([
+            'revision_id' => $revisionId,
+            'file_path' => $targetPath,
+            'file_hash' => $meta['file_hash'] ?? $file['file_hash'],
+            'mime_type' => $meta['mime_type'] ?? ($file['mime_type'] ?? 'application/octet-stream'),
+            'file_size_bytes' => $meta['file_size_bytes'] ?? ($file['file_size_bytes'] ?? 0),
+            'id' => $inventoryId,
+        ]);
+        $message = $message ?: 'Datei verknüpft, einsortiert und Metadaten aktualisiert.';
     }
 }
 
@@ -67,6 +134,8 @@ render_header('Files');
         </select>
     </form>
 </div>
+<?php if ($message): ?><div class="alert alert-success"><?= htmlspecialchars($message) ?></div><?php endif; ?>
+<?php if ($error): ?><div class="alert alert-danger"><?= htmlspecialchars($error) ?></div><?php endif; ?>
 <div class="card shadow-sm">
     <div class="card-body">
         <h2 class="h6">File Inventory</h2>
@@ -101,6 +170,9 @@ render_header('Files');
                                         <form method="post" class="d-inline">
                                             <input type="hidden" name="action" value="link_asset">
                                             <input type="hidden" name="inventory_id" value="<?= (int)$file['id'] ?>">
+                                            <input type="hidden" name="view_label" value="scan">
+                                            <input type="hidden" name="file_extension" value="<?= htmlspecialchars(extension_from_path($file['file_path'])) ?>">
+                                            <input type="hidden" name="apply_template" value="1">
                                             <select name="asset_id" class="form-select form-select-sm d-inline-block w-auto">
                                                 <option value="">Asset wählen</option>
                                                 <?php foreach ($assets as $asset): ?>
@@ -108,6 +180,7 @@ render_header('Files');
                                                 <?php endforeach; ?>
                                             </select>
                                             <button class="btn btn-sm btn-primary" type="submit">Link + Revision</button>
+                                            <div class="small text-muted">Auto-Pfad gem. Template und Dateiendung.</div>
                                         </form>
                                     <?php else: ?>
                                         <span class="text-muted">–</span>
