@@ -123,3 +123,23 @@ Selbstgehostete LAMP-WebApp zur Verwaltung von Kreativprojekten (Manga, Comics, 
 - Export/Backup von Metadaten (JSON/CSV).
 - API-Endpunkte (REST) für Integrationen.
 - Mehrsprachigkeit (i18n) via Sprach-Dateien.
+
+## 16) Erste Implementierung (MVP)
+- **Code-Basis:** Plain PHP 8.x ohne Framework, Bootstrap 5 für das UI. Einstieg über `public/index.php` (Dashboard) bzw. `public/login.php`.
+- **Konfiguration:**
+  - `includes/config.php` (bzw. `config.example.php` als Vorlage) enthält DB-Zugang und Basis-URL. Ohne eigenes `config.php` fällt die App auf die Beispielwerte zurück.
+  - Sessions werden über `app.session_name` gesteuert (Standard `kumiai_session`).
+- **DB-Schema:** In `database/schema.sql` hinterlegt (User, Projekte, Rollen, Entity-Typen, Entities, Assets, Revisionen, File-Inventory). Import via `mysql kumiai_asset_manager < database/schema.sql`.
+- **Auth & Rollen:** Login mit `email` + `password_hash` aus `users`. Projektrollen werden über `project_roles` gezogen, Owner/Admin können Projekte anlegen. Beispiel-Admin anlegen:
+  ```sql
+  INSERT INTO users (email, password_hash, display_name) VALUES ('admin@example.com', '<hash-aus-password_hash>', 'Admin');
+  ```
+  (`php -r "echo password_hash('admin123', PASSWORD_DEFAULT);"` liefert den passenden Hash.)
+- **Projektverwaltung:** `public/projects.php` listet eigene Projekte und legt neue an (Creator wird Owner). Projektdetails zeigen hinterlegte Entity-Typen.
+- **Generische Entities:** `public/entities.php` erlaubt pro Projekt das Anlegen von Entity-Typen sowie Entities (Name/Slug/Beschreibung, Metadata-JSON placeholder).
+- **Assets & Revisionen:** `public/assets.php` legt Assets (Typ, primäre Entity) an und erfasst Revisionen mit Dateipfad/Hash/MIME. File-Inventory wird beim Anlegen einer Revision auf `linked` gesetzt.
+- **File-Inventory & Review:**
+  - `scripts/scan.php <project_id>` scannt das Projekt-Root (aus `projects.root_path`), speichert Hash/Size/MIME als `untracked`.
+  - `public/files.php` listet Inventory (100 Einträge) und erlaubt für `untracked` Dateien: als `orphaned` markieren oder per Asset-Auswahl eine Revision anlegen (Status `linked`).
+- **Naming/Folder-Logik:** Noch als Platzhalter; Dateipfade werden aktuell manuell eingetragen bzw. aus dem Scanner übernommen.
+- **Deployment-Hinweise:** Webroot auf `public/` zeigen lassen; PHP-CLI für `scripts/scan.php` verfügbar machen (Cron). Thumbnails/Uploads sind im MVP noch nicht integriert.
