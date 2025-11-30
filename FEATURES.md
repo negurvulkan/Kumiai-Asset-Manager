@@ -12,16 +12,19 @@
 
 ## Projekt-Modell
 - Mehrprojekt-fähige Instanz mit Feldern für Name, Slug, Beschreibung, Root-Pfad und projektweite Einstellungen (Entity-Typen, Naming-Templates, Standard-Tag-Sets).
+- Projekte können im UI bearbeitet werden (Name, Slug, Beschreibung, Root-Pfad) – nur Owner/Admin.
 
 ## Generisches Entity-System
 - Projekt-spezifische Entity-Typen (z. B. character, location, scene, chapter, prop, background, item, creature).
 - Entities mit Feldern für Projekt, Typ, Name, Slug, Beschreibung und Metadaten-JSON (Erfassung im UI inkl. JSON-Validierung und Anzeige).
 - Optional: dynamische Zusatzfelder pro Entity-Typ.
+- Entities lassen sich inkl. Slug, Typ, Beschreibung und Metadaten im UI aktualisieren.
 
 ## Assets, Versionen & Datei-Bezug
 - Assets mit Projektbezug, Namen, Asset-Typ, primärer Entity, optionalen Entity-Verknüpfungen, Status (`active`, `deprecated`, `archived`), Beschreibung sowie Audit-Feldern.
 - Asset-Revisions als Datei-Versionen mit Versionszählung, relativem Pfad, Hash, MIME-Type, Abmessungen, Größe, Audit-Feldern und Review-Status (`pending`, `approved`, `rejected`).
 - Workflow: Upload erzeugt `pending` Revision; Uploads werden automatisch einsortiert (Template + Konfliktauflösung), Metadaten (Hash, MIME, Maße) werden ausgelesen und Thumbnails generiert. Editor setzt Status auf `approved` oder `rejected`.
+- Assets können im UI nachträglich in Name, Typ, primärer Entity, Beschreibung und Status angepasst werden.
 
 ## Dateiinventar & Scanner
 - File-Inventory speichert Projekt, relativen Pfad, Hash, Last-Seen sowie optionales Revision-Mapping mit Status (`untracked`, `linked`, `orphaned`, optional `missing`).

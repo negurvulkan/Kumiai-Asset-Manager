@@ -55,6 +55,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_e
     }
 }
 
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'update_entity') {
+    $entityId = (int)($_POST['entity_id'] ?? 0);
+    $name = trim($_POST['entity_name'] ?? '');
+    $slug = trim($_POST['entity_slug'] ?? '');
+    $description = trim($_POST['entity_description'] ?? '');
+    $typeId = (int)($_POST['type_id'] ?? 0);
+    $metadataInput = trim($_POST['metadata_json'] ?? '');
+    $metadataJson = '{}';
+
+    if ($metadataInput !== '') {
+        $decoded = json_decode($metadataInput, true);
+        if ($decoded === null && json_last_error() !== JSON_ERROR_NONE) {
+            $error = 'Metadata-JSON ist ungültig.';
+        } else {
+            $metadataJson = json_encode($decoded, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        }
+    }
+
+    if (!$error && $entityId > 0 && $name !== '' && $typeId > 0) {
+        $stmt = $pdo->prepare('UPDATE entities SET name = :name, slug = :slug, type_id = :type_id, description = :description, metadata_json = :metadata WHERE id = :id AND project_id = :project_id');
+        $stmt->execute([
+            'name' => $name,
+            'slug' => $slug,
+            'type_id' => $typeId,
+            'description' => $description,
+            'metadata' => $metadataJson,
+            'id' => $entityId,
+            'project_id' => $projectId,
+        ]);
+        if ($stmt->rowCount() > 0) {
+            $message = 'Entity aktualisiert.';
+        } else {
+            $error = 'Entity nicht gefunden.';
+        }
+    }
+}
+
 $typesStmt = $pdo->prepare('SELECT * FROM entity_types WHERE project_id = :project_id ORDER BY name');
 $typesStmt->execute(['project_id' => $projectId]);
 $entityTypes = $typesStmt->fetchAll();
@@ -155,6 +192,49 @@ render_header('Entities');
                 <?php endif; ?>
             </div>
         </div>
+        <?php if (!empty($entities)): ?>
+        <div class="card shadow-sm mb-3">
+            <div class="card-body">
+                <h3 class="h6">Entity bearbeiten</h3>
+                <form method="post" id="edit_entity_form">
+                    <input type="hidden" name="action" value="update_entity">
+                    <div class="mb-3">
+                        <label class="form-label" for="edit_entity_id">Entity wählen</label>
+                        <select class="form-select" name="entity_id" id="edit_entity_id" required>
+                            <?php foreach ($entities as $entity): ?>
+                                <option value="<?= (int)$entity['id'] ?>"><?= htmlspecialchars($entity['name']) ?> (<?= htmlspecialchars($entity['slug']) ?>)</option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="edit_entity_name">Name</label>
+                        <input class="form-control" name="entity_name" id="edit_entity_name" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="edit_entity_slug">Slug</label>
+                        <input class="form-control" name="entity_slug" id="edit_entity_slug" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="edit_type_id">Typ</label>
+                        <select class="form-select" name="type_id" id="edit_type_id" required>
+                            <?php foreach ($entityTypes as $type): ?>
+                                <option value="<?= (int)$type['id'] ?>"><?= htmlspecialchars($type['name']) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="edit_entity_description">Beschreibung</label>
+                        <textarea class="form-control" name="entity_description" id="edit_entity_description" rows="2"></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="edit_metadata_json">Metadata (JSON)</label>
+                        <textarea class="form-control" name="metadata_json" id="edit_metadata_json" rows="3"></textarea>
+                    </div>
+                    <button class="btn btn-primary" type="submit">Änderungen speichern</button>
+                </form>
+            </div>
+        </div>
+        <?php endif; ?>
         <div class="card shadow-sm">
             <div class="card-body">
                 <h3 class="h6">Neue Entity</h3>
@@ -192,4 +272,42 @@ render_header('Entities');
         </div>
     </div>
 </div>
+<script>
+(function() {
+    const entityForm = document.getElementById('edit_entity_form');
+    if (!entityForm) return;
+
+    const entityMap = <?= json_encode(array_reduce($entities, function ($carry, $entity) {
+        $carry[(int)$entity['id']] = [
+            'name' => $entity['name'],
+            'slug' => $entity['slug'],
+            'type_id' => (int)$entity['type_id'],
+            'description' => $entity['description'] ?? '',
+            'metadata_json' => is_string($entity['metadata_json']) ? $entity['metadata_json'] : json_encode($entity['metadata_json'] ?? '{}'),
+        ];
+        return $carry;
+    }, [])) ?>;
+
+    const select = document.getElementById('edit_entity_id');
+    const nameInput = document.getElementById('edit_entity_name');
+    const slugInput = document.getElementById('edit_entity_slug');
+    const typeSelect = document.getElementById('edit_type_id');
+    const descInput = document.getElementById('edit_entity_description');
+    const metadataInput = document.getElementById('edit_metadata_json');
+
+    const fillForm = () => {
+        const entityId = select.value;
+        const data = entityMap[entityId];
+        if (!data) return;
+        nameInput.value = data.name || '';
+        slugInput.value = data.slug || '';
+        typeSelect.value = data.type_id || '';
+        descInput.value = data.description || '';
+        metadataInput.value = data.metadata_json || '';
+    };
+
+    select.addEventListener('change', fillForm);
+    fillForm();
+})();
+</script>
 <?php render_footer(); ?>
