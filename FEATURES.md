@@ -15,13 +15,13 @@
 
 ## Generisches Entity-System
 - Projekt-spezifische Entity-Typen (z. B. character, location, scene, chapter, prop, background, item, creature).
-- Entities mit Feldern für Projekt, Typ, Name, Slug, Beschreibung und Metadaten-JSON.
+- Entities mit Feldern für Projekt, Typ, Name, Slug, Beschreibung und Metadaten-JSON (Erfassung im UI inkl. JSON-Validierung und Anzeige).
 - Optional: dynamische Zusatzfelder pro Entity-Typ.
 
 ## Assets, Versionen & Datei-Bezug
 - Assets mit Projektbezug, Namen, Asset-Typ, primärer Entity, optionalen Entity-Verknüpfungen, Status (`active`, `deprecated`, `archived`), Beschreibung sowie Audit-Feldern.
 - Asset-Revisions als Datei-Versionen mit Versionszählung, relativem Pfad, Hash, MIME-Type, Abmessungen, Größe, Audit-Feldern und Review-Status (`pending`, `approved`, `rejected`).
-- Workflow: Upload erzeugt `pending` Revision; Editor setzt Status auf `approved` oder `rejected`.
+- Workflow: Upload erzeugt `pending` Revision; Uploads werden automatisch einsortiert (Template + Konfliktauflösung), Metadaten (Hash, MIME, Maße) werden ausgelesen und Thumbnails generiert. Editor setzt Status auf `approved` oder `rejected`.
 
 ## Dateiinventar & Scanner
 - File-Inventory speichert Projekt, relativen Pfad, Hash, Last-Seen sowie optionales Revision-Mapping mit Status (`untracked`, `linked`, `orphaned`, optional `missing`).
@@ -34,7 +34,7 @@
 
 ## Naming-Templates & Auto-Renaming
 - Projekt- und Asset-Typ-bezogene Templates mit Platzhaltern wie `{project}`, `{project_slug}`, `{entity_type}`, `{entity_slug}`, `{asset_type}`, `{view}`, `{version}`, `{date}`, `{datetime}`, `{ext}`.
-- Renaming-Engine benennt Dateien beim Anlegen/Updaten um, verschiebt sie in Zielordner, aktualisiert DB-Pfade, erzeugt Thumbnails und löst Konflikte über Suffixe oder Fehler.
+- Renaming-Engine benennt Dateien beim Anlegen/Updaten um, verschiebt sie in Zielordner, aktualisiert DB-Pfade, erzeugt Thumbnails und löst Konflikte über Suffixe oder Fehler (Uploads und verknüpfte Inventory-Dateien werden automatisch gemäß Template bewegt).
 
 ## Ordnerstruktur & Autosortierung
 - Standardstruktur mit Charakter-, Szenen-, Background-, Concept-, Export- und Temp-Ordnern.
