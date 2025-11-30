@@ -34,6 +34,7 @@
 
 ## Review-Workflow für untracked Dateien
 - Zentraler „Untracked Files / Review Center“-Screen mit linker Dateiliste, mittlerer Preview/Metadaten (Hash, Pfad, Größe) und rechter Entity/Asset-Zuweisung.
+- Dateiliste zeigt Thumbnails/Vorschauen direkt in der linken Spalte für schnelle Sichtung.
 - File-First-Flow: Datei auswählen → Entity wählen oder per Formular „+ Neue Entity“ anlegen; Asset auswählen oder per Formular „+ Neues Asset aus Datei“ erzeugen (Name-Vorschlag aus Dateiname, Asset-Typ, optionale Beschreibung/Entity-Verknüpfung).
 - Speichern legt neue Asset-Revision an, benennt die Datei nach Naming-Template um, verschiebt sie in den Zielordner, aktualisiert `file_inventory.asset_revision_id` und setzt den Status auf `linked`.
 - Batch-Verarbeitung mit Multi-Select: mehrere Dateien → eine Revisionenfolge eines Assets oder neues Asset + Revisions in einem Schritt; gemeinsame Entity-/Asset-Zuweisung, optional Naming-Template + Move pro Datei. Auto-Vorschläge für Asset-Namen und Entity-Hints aus Ordnerstruktur.

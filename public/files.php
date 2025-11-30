@@ -328,6 +328,19 @@ $suggestedAssetName = $selectedFile ? pathinfo($selectedFile['file_path'], PATHI
 
 render_header('Files');
 ?>
+<style>
+.inventory-thumb {
+    width: 64px;
+    height: 64px;
+    object-fit: cover;
+}
+
+.inventory-thumb.placeholder {
+    width: 64px;
+    height: 64px;
+    font-size: 0.8rem;
+}
+</style>
 <div class="d-flex align-items-center justify-content-between mb-3">
     <div>
         <h1 class="h4 mb-0">Untracked Files / Review Center</h1>
@@ -375,9 +388,19 @@ render_header('Files');
                 <?php else: ?>
                     <ul class="list-group list-group-flush">
                         <?php foreach ($inventory as $file): ?>
-                            <?php $checked = in_array((int)$file['id'], $selectedIds, true); ?>
+                            <?php
+                                $checked = in_array((int)$file['id'], $selectedIds, true);
+                                $thumb = $inventoryThumbs[(int)$file['id']] ?? null;
+                            ?>
                             <li class="list-group-item d-flex align-items-center gap-2">
                                 <input class="form-check-input file-checkbox" type="checkbox" value="<?= (int)$file['id'] ?>" <?= $checked ? 'checked' : '' ?>>
+                                <div class="flex-shrink-0">
+                                    <?php if ($thumb): ?>
+                                        <img src="<?= htmlspecialchars($thumb) ?>" alt="Preview" class="inventory-thumb rounded border">
+                                    <?php else: ?>
+                                        <div class="inventory-thumb placeholder rounded border d-flex align-items-center justify-content-center bg-light text-muted">n/a</div>
+                                    <?php endif; ?>
+                                </div>
                                 <div class="flex-grow-1">
                                     <div class="fw-semibold small mb-1">#<?= (int)$file['id'] ?> · <code><?= htmlspecialchars($file['file_path']) ?></code></div>
                                     <div class="small text-muted">Hash <?= htmlspecialchars(substr($file['file_hash'], 0, 12)) ?>… · <?= htmlspecialchars($file['mime_type'] ?? 'n/a') ?></div>
