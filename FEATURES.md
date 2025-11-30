@@ -39,8 +39,15 @@
 - Speichern legt neue Asset-Revision an, benennt die Datei nach Naming-Template um, verschiebt sie in den Zielordner, aktualisiert `file_inventory.asset_revision_id` und setzt den Status auf `linked`.
 - Batch-Verarbeitung mit Multi-Select: mehrere Dateien → eine Revisionenfolge eines Assets oder neues Asset + Revisions in einem Schritt; gemeinsame Entity-/Asset-Zuweisung, optional Naming-Template + Move pro Datei. Auto-Vorschläge für Asset-Namen und Entity-Hints aus Ordnerstruktur.
 
+## Entity-First & Klassifizierungsachsen
+- Neue Dateien bleiben `untracked`, können aber per Multi-Select sofort einer Entity zugeordnet werden (`entity_file_links`), wodurch `classification_state` auf `entity_only` gesetzt wird und die Files in der Entity-Ansicht unter „Unklassifiziert“ erscheinen.
+- Schrittweise Klassifizierung: Outfit → Pose → View/Angle, jeder Schritt leitet `classification_state` logisch ab (`entity_only`, `outfit_assigned`, `pose_assigned`, `view_assigned`, `fully_classified`). On-the-fly-Assets für neue Outfits/Posen binden die aktuelle Revision automatisch an und sortieren/benennen nach Template.
+- Naming-Engine-Templates können `{character_slug}`, `{outfit}`, `{pose}`, `{view}`, `{version}`, `{ext}` nutzen; Auswertung erst, wenn alle benötigten Achsen belegt sind.
+- Flexible Classification Axes je Entity-Typ: konfigurierbar über `classification_axes` (Key, Label, applies_to), optionale Werte in `classification_axis_values`. Jede Revision erhält ihre Achsenzuordnung in `revision_classifications`, die UI zeigt passende Achsen dynamisch (Character: Outfit/Pose/View; Location: TimeOfDay/Weather/CameraAngle), Filter nutzen dieselben Achsen.
+- Entity-Ansicht `/entity_files.php` bündelt Preview, Multi-Select, Klassifizierung und Asset-Anlage; `entities.php` enthält ein Admin-Panel zum Pflegen der Achsen und vordefinierten Werte.
+
 ## Naming-Templates & Auto-Renaming
-- Projekt- und Asset-Typ-bezogene Templates mit Platzhaltern wie `{project}`, `{project_slug}`, `{entity_type}`, `{entity_slug}`, `{asset_type}`, `{view}`, `{version}`, `{date}`, `{datetime}`, `{ext}`.
+- Projekt- und Asset-Typ-bezogene Templates mit Platzhaltern wie `{project}`, `{project_slug}`, `{entity_type}`, `{entity_slug}`, `{asset_type}`, `{character_slug}`, `{outfit}`, `{pose}`, `{view}`, `{version}`, `{date}`, `{datetime}`, `{ext}`.
 - Renaming-Engine nutzt Entity-/Asset-Daten in Echtzeit, benennt Dateien beim Anlegen/Updaten um, verschiebt sie in Zielordner, aktualisiert DB-Pfade, erzeugt Thumbnails und löst Konflikte über Suffixe oder Fehler (Uploads und verknüpfte Inventory-Dateien werden automatisch gemäß Template bewegt).
 
 ## Ordnerstruktur & Autosortierung

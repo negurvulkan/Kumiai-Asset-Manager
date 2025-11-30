@@ -50,12 +50,13 @@ function naming_rule_for_type(string $assetType, array $rules = []): array
     return $rules[$assetType] ?? $rules['other'];
 }
 
-function naming_placeholder_context(array $project, array $asset, ?array $entity, int $version, string $extension, string $view): array
+function naming_placeholder_context(array $project, array $asset, ?array $entity, int $version, string $extension, string $view, array $classification = []): array
 {
     $entitySlug = $entity['slug'] ?? ($entity['name'] ?? null);
     $entitySlug = $entitySlug ? kumiai_slug($entitySlug) : 'unassigned';
     $assetSlug = kumiai_slug($asset['name'] ?? 'asset');
     $projectSlug = $project['slug'] ?? kumiai_slug($project['name'] ?? 'project');
+    $classification = array_change_key_case($classification, CASE_LOWER);
 
     return [
         'project' => $project['name'] ?? 'Project',
@@ -66,7 +67,10 @@ function naming_placeholder_context(array $project, array $asset, ?array $entity
         'asset_type' => $asset['asset_type'] ?? 'other',
         'asset_name' => $asset['name'] ?? '',
         'asset_slug' => $assetSlug,
-        'view' => kumiai_slug($view ?: 'main'),
+        'view' => kumiai_slug($classification['view'] ?? $view ?: 'main'),
+        'pose' => kumiai_slug($classification['pose'] ?? ''),
+        'outfit' => kumiai_slug($classification['outfit'] ?? ''),
+        'character_slug' => $entity && ($entity['type'] ?? '') === 'character' ? $entitySlug : $entitySlug,
         'version' => str_pad((string)$version, 2, '0', STR_PAD_LEFT),
         'date' => date('Ymd'),
         'datetime' => date('Ymd_His'),
@@ -82,10 +86,10 @@ function render_naming_pattern(string $pattern, array $context): string
     }, $pattern);
 }
 
-function generate_revision_path(array $project, array $asset, ?array $entity, int $version, string $extension, string $view = 'main', array $rules = []): array
+function generate_revision_path(array $project, array $asset, ?array $entity, int $version, string $extension, string $view = 'main', array $rules = [], array $classification = []): array
 {
     $rule = naming_rule_for_type($asset['asset_type'] ?? 'other', $rules);
-    $context = naming_placeholder_context($project, $asset, $entity, $version, $extension, $view);
+    $context = naming_placeholder_context($project, $asset, $entity, $version, $extension, $view, $classification);
 
     $folder = render_naming_pattern($rule['folder'], $context);
     $fileName = render_naming_pattern($rule['template'], $context);

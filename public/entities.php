@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/../includes/layout.php';
+require_once __DIR__ . '/../includes/naming.php';
 require_login();
 
 $message = null;
@@ -92,6 +93,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'updat
     }
 }
 
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_axis') {
+    $axisKey = kumiai_slug(trim($_POST['axis_key'] ?? ''));
+    $label = trim($_POST['axis_label'] ?? '');
+    $appliesTo = trim($_POST['applies_to'] ?? 'character');
+    $hasValues = isset($_POST['has_predefined_values']) ? 1 : 0;
+    if ($axisKey !== '' && $label !== '') {
+        $stmt = $pdo->prepare('INSERT INTO classification_axes (axis_key, label, applies_to, has_predefined_values, created_at) VALUES (:axis_key, :label, :applies_to, :has_predefined_values, NOW())');
+        $stmt->execute([
+            'axis_key' => $axisKey,
+            'label' => $label,
+            'applies_to' => $appliesTo,
+            'has_predefined_values' => $hasValues,
+        ]);
+        $message = 'Classification Axis gespeichert.';
+    }
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_axis_value') {
+    $axisId = (int)($_POST['axis_id'] ?? 0);
+    $valueKey = kumiai_slug(trim($_POST['value_key'] ?? ''));
+    $label = trim($_POST['value_label'] ?? '');
+    if ($axisId > 0 && $valueKey !== '' && $label !== '') {
+        $stmt = $pdo->prepare('INSERT INTO classification_axis_values (axis_id, value_key, label, created_at) VALUES (:axis_id, :value_key, :label, NOW())');
+        $stmt->execute([
+            'axis_id' => $axisId,
+            'value_key' => $valueKey,
+            'label' => $label,
+        ]);
+        $message = 'Axis Value gespeichert.';
+    }
+}
+
 $typesStmt = $pdo->prepare('SELECT * FROM entity_types WHERE project_id = :project_id ORDER BY name');
 $typesStmt->execute(['project_id' => $projectId]);
 $entityTypes = $typesStmt->fetchAll();
@@ -99,6 +132,16 @@ $entityTypes = $typesStmt->fetchAll();
 $entitiesStmt = $pdo->prepare('SELECT e.*, t.name AS type_name FROM entities e JOIN entity_types t ON e.type_id = t.id WHERE e.project_id = :project_id ORDER BY e.created_at DESC LIMIT 50');
 $entitiesStmt->execute(['project_id' => $projectId]);
 $entities = $entitiesStmt->fetchAll();
+
+$axesStmt = $pdo->query('SELECT * FROM classification_axes ORDER BY applies_to, label');
+$axes = $axesStmt->fetchAll();
+
+$axisValuesStmt = $pdo->query('SELECT * FROM classification_axis_values ORDER BY axis_id, label');
+$axisValues = $axisValuesStmt->fetchAll();
+$axisValueMap = [];
+foreach ($axisValues as $value) {
+    $axisValueMap[(int)$value['axis_id']][] = $value;
+}
 
 render_header('Entities');
 ?>
@@ -157,6 +200,97 @@ render_header('Entities');
                 </form>
             </div>
         </div>
+        <div class="card shadow-sm mt-3">
+            <div class="card-body">
+                <h3 class="h6">Classification Axes</h3>
+                <?php if (empty($axes)): ?>
+                    <p class="text-muted">Noch keine Achsen definiert.</p>
+                <?php else: ?>
+                    <div class="table-responsive mb-3">
+                        <table class="table table-sm align-middle mb-0">
+                            <thead>
+                                <tr>
+                                    <th>Key</th>
+                                    <th>Label</th>
+                                    <th>Typ</th>
+                                    <th>Values</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($axes as $axis): ?>
+                                    <?php $values = $axisValueMap[(int)$axis['id']] ?? []; ?>
+                                    <tr>
+                                        <td><code><?= htmlspecialchars($axis['axis_key']) ?></code></td>
+                                        <td><?= htmlspecialchars($axis['label']) ?></td>
+                                        <td><?= htmlspecialchars($axis['applies_to']) ?></td>
+                                        <td>
+                                            <?php if (empty($values)): ?>
+                                                <span class="text-muted">–</span>
+                                            <?php else: ?>
+                                                <span class="badge bg-light text-dark border"><?= count($values) ?> Werte</span>
+                                            <?php endif; ?>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                <?php endif; ?>
+                <h4 class="h6">Achse hinzufügen</h4>
+                <form method="post" class="mb-3">
+                    <input type="hidden" name="action" value="add_axis">
+                    <div class="mb-2">
+                        <label class="form-label" for="axis_key">Key</label>
+                        <input class="form-control" name="axis_key" id="axis_key" placeholder="outfit" required>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label" for="axis_label">Label</label>
+                        <input class="form-control" name="axis_label" id="axis_label" placeholder="Outfit" required>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label" for="applies_to">Entity-Typ</label>
+                        <select class="form-select" name="applies_to" id="applies_to">
+                            <option value="character">character</option>
+                            <option value="location">location</option>
+                            <option value="scene">scene</option>
+                            <option value="chapter">chapter</option>
+                            <option value="prop">prop</option>
+                            <option value="background">background</option>
+                            <option value="item">item</option>
+                            <option value="creature">creature</option>
+                            <option value="project_custom">project_custom</option>
+                        </select>
+                    </div>
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" name="has_predefined_values" id="has_predefined_values">
+                        <label class="form-check-label" for="has_predefined_values">Vordefinierte Werte erwartet</label>
+                    </div>
+                    <button class="btn btn-primary" type="submit">Achse speichern</button>
+                </form>
+                <h4 class="h6">Werte pflegen</h4>
+                <form method="post">
+                    <input type="hidden" name="action" value="add_axis_value">
+                    <div class="mb-2">
+                        <label class="form-label" for="axis_id">Achse</label>
+                        <select class="form-select" name="axis_id" id="axis_id" required>
+                            <option value="">Bitte wählen</option>
+                            <?php foreach ($axes as $axis): ?>
+                                <option value="<?= (int)$axis['id'] ?>"><?= htmlspecialchars($axis['label']) ?> (<?= htmlspecialchars($axis['applies_to']) ?>)</option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label" for="value_key">Key</label>
+                        <input class="form-control" name="value_key" id="value_key" placeholder="front" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="value_label">Label</label>
+                        <input class="form-control" name="value_label" id="value_label" placeholder="Frontansicht" required>
+                    </div>
+                    <button class="btn btn-primary" type="submit">Wert speichern</button>
+                </form>
+            </div>
+        </div>
     </div>
     <div class="col-md-6">
         <div class="card shadow-sm mb-3">
@@ -174,6 +308,7 @@ render_header('Entities');
                                     <th>Typ</th>
                                     <th>Metadata</th>
                                     <th>Erstellt</th>
+                                    <th>Unklass. Dateien</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -184,6 +319,9 @@ render_header('Entities');
                                         <td><?= htmlspecialchars($entity['type_name']) ?></td>
                                         <td class="small"><pre class="mb-0 bg-light p-2 border rounded" style="max-width: 320px; white-space: pre-wrap; word-break: break-word;"><?= htmlspecialchars($entity['metadata_json'] ?: '{}') ?></pre></td>
                                         <td><?= htmlspecialchars($entity['created_at']) ?></td>
+                                        <td>
+                                            <a class="btn btn-sm btn-outline-primary" href="/entity_files.php?entity_id=<?= (int)$entity['id'] ?>">Klassifizieren</a>
+                                        </td>
                                     </tr>
                                 <?php endforeach; ?>
                             </tbody>
