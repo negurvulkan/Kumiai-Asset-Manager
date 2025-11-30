@@ -101,9 +101,50 @@ CREATE TABLE file_inventory (
     file_size_bytes BIGINT NULL,
     mime_type VARCHAR(255) NULL,
     asset_revision_id INT NULL,
+    classification_state ENUM('unclassified','entity_only','outfit_assigned','pose_assigned','view_assigned','fully_classified') NOT NULL DEFAULT 'unclassified',
     status ENUM('untracked','linked','orphaned','missing') NOT NULL DEFAULT 'untracked',
     last_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY uniq_file (project_id, file_path),
     FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
     FOREIGN KEY (asset_revision_id) REFERENCES asset_revisions(id) ON DELETE SET NULL
+);
+
+CREATE TABLE entity_file_links (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    entity_id INT NOT NULL,
+    file_inventory_id INT NOT NULL,
+    notes TEXT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_entity_file (entity_id, file_inventory_id),
+    FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE CASCADE,
+    FOREIGN KEY (file_inventory_id) REFERENCES file_inventory(id) ON DELETE CASCADE
+);
+
+CREATE TABLE classification_axes (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    axis_key VARCHAR(100) NOT NULL,
+    label VARCHAR(255) NOT NULL,
+    applies_to ENUM('character','location','scene','chapter','prop','background','item','creature','project_custom') NOT NULL,
+    has_predefined_values TINYINT(1) NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_axis_per_type (axis_key, applies_to)
+);
+
+CREATE TABLE classification_axis_values (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    axis_id INT NOT NULL,
+    value_key VARCHAR(100) NOT NULL,
+    label VARCHAR(255) NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_axis_value (axis_id, value_key),
+    FOREIGN KEY (axis_id) REFERENCES classification_axes(id) ON DELETE CASCADE
+);
+
+CREATE TABLE revision_classifications (
+    revision_id INT NOT NULL,
+    axis_id INT NOT NULL,
+    value_key VARCHAR(100) NOT NULL,
+    PRIMARY KEY (revision_id, axis_id),
+    FOREIGN KEY (revision_id) REFERENCES asset_revisions(id) ON DELETE CASCADE,
+    FOREIGN KEY (axis_id) REFERENCES classification_axes(id) ON DELETE CASCADE
 );
