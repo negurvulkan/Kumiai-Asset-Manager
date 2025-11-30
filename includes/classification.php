@@ -58,6 +58,77 @@ function load_axes_for_entity(PDO $pdo, string $entityType): array
     return array_values($grouped);
 }
 
+function normalize_axis_values(array $axes, array $values): array
+{
+    $normalized = [];
+    foreach ($axes as $axis) {
+        $key = $axis['axis_key'];
+        $value = $values[$key] ?? '';
+        if ($value === '' || $value === null) {
+            continue;
+        }
+
+        $normalized[$key] = !empty($axis['values']) ? $value : kumiai_slug((string)$value);
+    }
+
+    return $normalized;
+}
+
+function build_asset_key(array $entity, array $axes, array $values, ?int $assetIdForMisc = null): string
+{
+    $slug = kumiai_slug($entity['slug'] ?? ($entity['name'] ?? 'item'));
+    $parts = [$slug];
+
+    foreach ($axes as $axis) {
+        $value = $values[$axis['axis_key']] ?? '';
+        if ($value === '' || $value === null) {
+            continue;
+        }
+        $parts[] = kumiai_slug((string)$value);
+    }
+
+    if (count($parts) === 1) {
+        $parts[] = 'misc';
+        $parts[] = $assetIdForMisc ? str_pad((string)$assetIdForMisc, 3, '0', STR_PAD_LEFT) : 'pending';
+    }
+
+    return implode('_', $parts);
+}
+
+function fetch_asset_classifications(PDO $pdo, int $assetId): array
+{
+    $stmt = $pdo->prepare('SELECT ca.axis_key, ac.value_key FROM asset_classifications ac JOIN classification_axes ca ON ca.id = ac.axis_id WHERE ac.asset_id = :asset_id');
+    $stmt->execute(['asset_id' => $assetId]);
+    $rows = $stmt->fetchAll();
+    $map = [];
+    foreach ($rows as $row) {
+        $map[$row['axis_key']] = $row['value_key'];
+    }
+
+    return $map;
+}
+
+function replace_asset_classifications(PDO $pdo, int $assetId, array $axes, array $values): void
+{
+    $pdo->prepare('DELETE FROM asset_classifications WHERE asset_id = :asset_id')->execute(['asset_id' => $assetId]);
+    if (empty($values)) {
+        return;
+    }
+
+    $stmt = $pdo->prepare('INSERT INTO asset_classifications (asset_id, axis_id, value_key) VALUES (:asset_id, :axis_id, :value_key)');
+    foreach ($axes as $axis) {
+        $key = $axis['axis_key'];
+        if (!isset($values[$key]) || $values[$key] === '') {
+            continue;
+        }
+        $stmt->execute([
+            'asset_id' => $assetId,
+            'axis_id' => $axis['id'],
+            'value_key' => $values[$key],
+        ]);
+    }
+}
+
 function derive_classification_state(array $axes, array $values): string
 {
     $normalized = array_change_key_case($values, CASE_LOWER);

@@ -73,48 +73,67 @@ $selectedLinks = parse_selected_link_ids();
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     if ($action === 'classify' && !empty($selectedLinks)) {
-        $assetId = (int)($_POST['asset_id'] ?? 0);
-        $newAssetName = trim($_POST['new_asset_name'] ?? '');
         $newAssetType = trim($_POST['new_asset_type'] ?? 'concept');
         $newAssetDescription = trim($_POST['new_asset_description'] ?? '');
-        $classInputs = [];
+        $displayName = trim($_POST['new_asset_display_name'] ?? '');
+        $rawInputs = [];
+        $assetId = 0;
 
         foreach ($axes as $axis) {
             $inputKey = 'axis_' . $axis['id'];
-            $value = trim($_POST[$inputKey] ?? '');
-            if ($value === '') {
-                continue;
-            }
-            $valueKey = !empty($axis['values']) ? $value : kumiai_slug($value);
-            $classInputs[$axis['axis_key']] = $valueKey;
+            $rawInputs[$axis['axis_key']] = trim($_POST[$inputKey] ?? '');
         }
 
-        if ($assetId <= 0 && $newAssetName === '') {
-            $error = 'Bitte bestehendes Asset wählen oder ein neues Asset benennen.';
+        $classInputs = normalize_axis_values($axes, $rawInputs);
+        $classificationMap = $classInputs;
+        $assetKey = build_asset_key($entity, $axes, $classInputs);
+        $assetRow = null;
+
+        $assetLookup = $pdo->prepare('SELECT a.*, e.name AS primary_entity_name, e.slug AS primary_entity_slug, et.name AS primary_entity_type FROM assets a LEFT JOIN entities e ON a.primary_entity_id = e.id LEFT JOIN entity_types et ON e.type_id = et.id WHERE a.project_id = :project_id AND a.asset_key = :asset_key LIMIT 1');
+        $assetLookup->execute(['project_id' => $projectId, 'asset_key' => $assetKey]);
+        $existingAsset = $assetLookup->fetch();
+        if ($existingAsset) {
+            $assetRow = $existingAsset;
+            $fetched = fetch_asset_classifications($pdo, (int)$existingAsset['id']);
+            $classificationMap = !empty($fetched) ? $fetched : $classInputs;
+            $assetId = (int)$existingAsset['id'];
         }
 
-        if (!$error && $assetId <= 0 && $newAssetName !== '') {
-            $assetInsert = $pdo->prepare('INSERT INTO assets (project_id, name, asset_type, primary_entity_id, description, status, created_by, created_at) VALUES (:project_id, :name, :asset_type, :primary_entity_id, :description, "active", :created_by, NOW())');
+        if (!$assetRow) {
+            $assetInsert = $pdo->prepare('INSERT INTO assets (project_id, name, asset_key, display_name, asset_type, primary_entity_id, description, status, created_by, created_at) VALUES (:project_id, :name, :asset_key, :display_name, :asset_type, :primary_entity_id, :description, "active", :created_by, NOW())');
             $assetInsert->execute([
                 'project_id' => $projectId,
-                'name' => $newAssetName,
+                'name' => $assetKey,
+                'asset_key' => $assetKey,
+                'display_name' => $displayName !== '' ? $displayName : null,
                 'asset_type' => $newAssetType ?: 'concept',
                 'primary_entity_id' => $entityId,
                 'description' => $newAssetDescription,
                 'created_by' => current_user()['id'],
             ]);
             $assetId = (int)$pdo->lastInsertId();
-            $message = 'Asset erstellt.';
-        }
 
-        $assetRow = null;
-        if ($assetId > 0) {
-            $assetStmt = $pdo->prepare('SELECT a.*, e.name AS primary_entity_name, e.slug AS primary_entity_slug, et.name AS primary_entity_type FROM assets a LEFT JOIN entities e ON a.primary_entity_id = e.id LEFT JOIN entity_types et ON et.id = e.type_id WHERE a.id = :id AND a.project_id = :project_id');
-            $assetStmt->execute(['id' => $assetId, 'project_id' => $projectId]);
-            $assetRow = $assetStmt->fetch();
-            if (!$assetRow) {
-                $error = 'Asset nicht gefunden oder gehört nicht zum Projekt.';
+            if (str_contains($assetKey, 'pending')) {
+                $assetKey = build_asset_key($entity, $axes, $classInputs, $assetId);
+                $pdo->prepare('UPDATE assets SET asset_key = :asset_key, name = :asset_key WHERE id = :id')->execute([
+                    'asset_key' => $assetKey,
+                    'id' => $assetId,
+                ]);
             }
+
+            replace_asset_classifications($pdo, $assetId, $axes, $classInputs);
+            $classificationMap = $classInputs;
+            $assetRow = [
+                'id' => $assetId,
+                'asset_key' => $assetKey,
+                'asset_type' => $newAssetType ?: 'concept',
+                'primary_entity_id' => $entityId,
+                'primary_entity_name' => $entity['name'],
+                'primary_entity_slug' => $entity['slug'],
+                'primary_entity_type' => $entity['type_name'],
+                'display_name' => $displayName,
+            ];
+            $message = 'Asset erstellt.';
         }
 
         if (!$error && $assetRow) {
@@ -131,13 +150,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $versionStmt->execute(['asset_id' => $assetId]);
                 $nextVersion = ((int)$versionStmt->fetchColumn()) + 1;
                 $revisionClassStmt = $pdo->prepare('INSERT INTO revision_classifications (revision_id, axis_id, value_key) VALUES (:revision_id, :axis_id, :value_key)');
+                $viewLabel = $classificationMap['view'] ?? 'main';
 
                 foreach ($files as $file) {
                     $targetPath = sanitize_relative_path($file['file_path']);
                     $meta = collect_file_metadata($projectRoot . $file['file_path']);
                     $extension = extension_from_path($file['file_path']);
-                    $viewLabel = $classInputs['view'] ?? 'main';
-                    $generated = generate_revision_path($projectFull, $assetRow, ['id' => $entityId, 'name' => $entity['name'], 'slug' => $entity['slug'], 'type' => $entity['type_name']], $nextVersion, $extension, $viewLabel, [], $classInputs);
+                    $generated = generate_revision_path($projectFull, $assetRow, ['id' => $entityId, 'name' => $entity['name'], 'slug' => $entity['slug'], 'type' => $entity['type_name']], $nextVersion, $extension, $viewLabel, [], $classificationMap);
                     $targetPath = sanitize_relative_path($generated['relative_path']);
 
                     $source = $projectRoot . $file['file_path'];
@@ -176,12 +195,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $revisionId = (int)$pdo->lastInsertId();
 
                     foreach ($axes as $axis) {
-                        $inputKey = 'axis_' . $axis['id'];
-                        $value = trim($_POST[$inputKey] ?? '');
-                        if ($value === '') {
+                        $valueKey = $classificationMap[$axis['axis_key']] ?? '';
+                        if ($valueKey === '') {
                             continue;
                         }
-                        $valueKey = !empty($axis['values']) ? $value : kumiai_slug($value);
                         $revisionClassStmt->execute([
                             'revision_id' => $revisionId,
                             'axis_id' => $axis['id'],
@@ -189,7 +206,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         ]);
                     }
 
-                    $state = derive_classification_state($axes, $classInputs);
+                    $state = derive_classification_state($axes, $classificationMap);
                     $updateInventory = $pdo->prepare('UPDATE file_inventory SET status = "linked", classification_state = :state, asset_revision_id = :revision_id, file_path = :file_path, file_hash = :file_hash, mime_type = :mime_type, file_size_bytes = :file_size_bytes, last_seen_at = NOW() WHERE id = :id');
                     $updateInventory->execute([
                         'state' => $state,
@@ -215,10 +232,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $linkStmt = $pdo->prepare('SELECT fi.*, l.id AS link_id, l.notes FROM entity_file_links l JOIN file_inventory fi ON fi.id = l.file_inventory_id WHERE l.entity_id = :entity_id AND fi.project_id = :project_id AND fi.classification_state <> "fully_classified" ORDER BY fi.last_seen_at DESC');
 $linkStmt->execute(['entity_id' => $entityId, 'project_id' => $projectId]);
 $links = $linkStmt->fetchAll();
-
-$assetsStmt = $pdo->prepare('SELECT id, name, asset_type FROM assets WHERE project_id = :project_id ORDER BY name');
-$assetsStmt->execute(['project_id' => $projectId]);
-$assets = $assetsStmt->fetchAll();
 
 $inventoryThumbs = [];
 foreach ($links as $file) {
@@ -362,31 +375,27 @@ render_header('Entity Files');
                             <div class="mb-2">
                                 <label class="form-label" for="axis_<?= (int)$axis['id'] ?>"><?= htmlspecialchars($axis['label']) ?></label>
                                 <?php if (!empty($axis['values'])): ?>
-                                    <select class="form-select form-select-sm" name="axis_<?= (int)$axis['id'] ?>" id="axis_<?= (int)$axis['id'] ?>">
+                                    <select class="form-select form-select-sm axis-field" name="axis_<?= (int)$axis['id'] ?>" id="axis_<?= (int)$axis['id'] ?>" data-axis-key="<?= htmlspecialchars($axis['axis_key']) ?>">
                                         <option value="">–</option>
                                         <?php foreach ($axis['values'] as $value): ?>
                                             <option value="<?= htmlspecialchars($value['value_key']) ?>"><?= htmlspecialchars($value['label']) ?></option>
                                         <?php endforeach; ?>
                                     </select>
                                 <?php else: ?>
-                                    <input class="form-control form-control-sm" name="axis_<?= (int)$axis['id'] ?>" id="axis_<?= (int)$axis['id'] ?>" placeholder="Wert">
+                                    <input class="form-control form-control-sm axis-field" name="axis_<?= (int)$axis['id'] ?>" id="axis_<?= (int)$axis['id'] ?>" data-axis-key="<?= htmlspecialchars($axis['axis_key']) ?>" placeholder="Wert">
                                 <?php endif; ?>
                             </div>
                         <?php endforeach; ?>
                     <?php endif; ?>
                     <hr>
                     <div class="mb-2">
-                        <label class="form-label" for="asset_id">Bestehendes Asset</label>
-                        <select class="form-select form-select-sm" name="asset_id" id="asset_id">
-                            <option value="">–</option>
-                            <?php foreach ($assets as $asset): ?>
-                                <option value="<?= (int)$asset['id'] ?>"><?= htmlspecialchars($asset['name']) ?> (<?= htmlspecialchars($asset['asset_type']) ?>)</option>
-                            <?php endforeach; ?>
-                        </select>
+                        <label class="form-label">Asset-Key (aus Entity + Achsen)</label>
+                        <div class="form-control form-control-sm bg-light" id="asset_key_preview">Wird nach Eingabe der Achsen berechnet.</div>
+                        <small class="text-muted">Existiert die Kombination, wird automatisch die nächste Revision angelegt.</small>
                     </div>
                     <div class="mb-2">
-                        <label class="form-label" for="new_asset_name">Neues Asset anlegen</label>
-                        <input class="form-control form-control-sm" name="new_asset_name" id="new_asset_name" placeholder="z. B. Outfit: Sommeruniform">
+                        <label class="form-label" for="new_asset_display_name">Anzeigename (optional)</label>
+                        <input class="form-control form-control-sm" name="new_asset_display_name" id="new_asset_display_name" placeholder="Freies Label für Listen">
                     </div>
                     <div class="mb-2">
                         <label class="form-label" for="new_asset_type">Asset-Typ</label>
@@ -423,6 +432,54 @@ render_header('Entity Files');
 
     checkboxes.forEach(cb => cb.addEventListener('change', syncSelection));
     syncSelection();
+})();
+</script>
+<script>
+(function() {
+    const preview = document.getElementById('asset_key_preview');
+    const axisFields = document.querySelectorAll('.axis-field');
+    if (!preview || axisFields.length === 0) {
+        return;
+    }
+
+    const entitySlug = <?= json_encode(kumiai_slug($entity['slug'] ?? $entity['name'])) ?>;
+    const axisOrder = <?= json_encode(array_map(fn($axis) => $axis['axis_key'], $axes)) ?>;
+
+    const slugify = (value) => {
+        return (value || '')
+            .toString()
+            .normalize('NFKD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '') || 'item';
+    };
+
+    const updatePreview = () => {
+        const values = {};
+        axisFields.forEach((field) => {
+            const key = field.dataset.axisKey;
+            if (!key) return;
+            values[key] = slugify(field.value || '');
+        });
+
+        const parts = [entitySlug];
+        axisOrder.forEach((key) => {
+            const value = values[key] || '';
+            if (value) {
+                parts.push(value);
+            }
+        });
+
+        if (parts.length === 1) {
+            parts.push('misc', 'pending');
+        }
+
+        preview.textContent = parts.join('_');
+    };
+
+    axisFields.forEach((field) => field.addEventListener('input', updatePreview));
+    updatePreview();
 })();
 </script>
 <?php render_footer(); ?>

@@ -21,10 +21,10 @@
 - Entities lassen sich inkl. Slug, Typ, Beschreibung und Metadaten im UI aktualisieren.
 
 ## Assets, Versionen & Datei-Bezug
-- Assets mit Projektbezug, Namen, Asset-Typ, primärer Entity, optionalen Entity-Verknüpfungen, Status (`active`, `deprecated`, `archived`), Beschreibung sowie Audit-Feldern.
-- Asset-Revisions als Datei-Versionen mit Versionszählung, relativem Pfad, Hash, MIME-Type, Abmessungen, Größe, Audit-Feldern und Review-Status (`pending`, `approved`, `rejected`).
+- Assets mit Projektbezug, **asset_key** (deterministisch aus Entity-Slug + Achsenkombination), optionalem display_name, Asset-Typ, primärer Entity, optionalen Entity-Verknüpfungen, Status (`active`, `deprecated`, `archived`), Beschreibung sowie Audit-Feldern. Existiert eine Entity+Achsen-Kombination bereits, wird sie automatisch wiederverwendet; achsenlose Assets nutzen `{entity_slug}_misc_{id}` als Fallback-Key.
+- Asset-Revisions als Datei-Versionen mit Versionszählung, relativem Pfad, Hash, MIME-Type, Abmessungen, Größe, Audit-Feldern und Review-Status (`pending`, `approved`, `rejected`). Klassifikationen werden sowohl auf Asset- als auch auf Revisions-Ebene gespeichert (`asset_classifications`, `revision_classifications`).
 - Workflow: Upload erzeugt `pending` Revision; Uploads werden automatisch einsortiert (Template + Konfliktauflösung), Metadaten (Hash, MIME, Maße) werden ausgelesen und Thumbnails generiert. Editor setzt Status auf `approved` oder `rejected`.
-- Assets können im UI nachträglich in Name, Typ, primärer Entity, Beschreibung und Status angepasst werden.
+- Assets können im UI nachträglich im Anzeige-Namen, Typ, Beschreibung und Status angepasst werden; der asset_key bleibt unverändert und steuert die Dateinamen.
 
 ## Dateiinventar & Scanner
 - File-Inventory speichert Projekt, relativen Pfad, Hash, Größe, MIME/Metadaten, Last-Seen sowie optionales Revision-Mapping mit Status (`untracked`, `linked`, `orphaned`, optional `missing`).
@@ -47,8 +47,8 @@
 - Entity-Ansicht `/entity_files.php` bündelt Preview, Multi-Select, Klassifizierung und Asset-Anlage; `entities.php` enthält ein Admin-Panel zum Pflegen der Achsen und vordefinierten Werte.
 
 ## Naming-Templates & Auto-Renaming
-- Projekt- und Asset-Typ-bezogene Templates mit Platzhaltern wie `{project}`, `{project_slug}`, `{entity_type}`, `{entity_slug}`, `{asset_type}`, `{character_slug}`, `{outfit}`, `{pose}`, `{view}`, `{version}`, `{date}`, `{datetime}`, `{ext}`.
-- Renaming-Engine nutzt Entity-/Asset-Daten in Echtzeit, benennt Dateien beim Anlegen/Updaten um, verschiebt sie in Zielordner, aktualisiert DB-Pfade, erzeugt Thumbnails und löst Konflikte über Suffixe oder Fehler (Uploads und verknüpfte Inventory-Dateien werden automatisch gemäß Template bewegt).
+- Projekt- und Asset-Typ-bezogene Templates mit Platzhaltern wie `{project}`, `{project_slug}`, `{entity_type}`, `{entity_slug}`, `{asset_type}`, `{asset_key}`, `{character_slug}`, `{outfit}`, `{pose}`, `{view}`, `{version}`, `{date}`, `{datetime}`, `{ext}`.
+- Renaming-Engine nutzt Entity-/Asset-Daten in Echtzeit, benennt Dateien beim Anlegen/Updaten um, verschiebt sie in Zielordner, aktualisiert DB-Pfade, erzeugt Thumbnails und löst Konflikte über Suffixe oder Fehler (Uploads und verknüpfte Inventory-Dateien werden automatisch gemäß Template bewegt). Standard-Dateinamen folgen `{asset_key}_v{version}.{ext}` für alle Revisionen.
 
 ## Ordnerstruktur & Autosortierung
 - Standardstruktur mit Charakter-, Szenen-, Background-, Concept-, Export- und Temp-Ordnern.

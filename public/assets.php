@@ -2,6 +2,7 @@
 require_once __DIR__ . '/../includes/layout.php';
 require_once __DIR__ . '/../includes/naming.php';
 require_once __DIR__ . '/../includes/files.php';
+require_once __DIR__ . '/../includes/classification.php';
 require_login();
 
 $message = null;
@@ -34,40 +35,98 @@ foreach ($projects as $project) {
 }
 $canReview = $projectContext && in_array($projectContext['role'], ['owner', 'admin', 'editor'], true);
 
+$entitiesStmt = $pdo->prepare('SELECT e.id, e.name, e.slug, t.name AS type_name FROM entities e JOIN entity_types t ON t.id = e.type_id WHERE e.project_id = :project_id ORDER BY e.name');
+$entitiesStmt->execute(['project_id' => $projectId]);
+$entities = $entitiesStmt->fetchAll();
+
+$axesByType = [];
+foreach ($entities as $entity) {
+    $typeKey = entity_type_key($entity['type_name'] ?? '');
+    if (!isset($axesByType[$typeKey])) {
+        $axesByType[$typeKey] = load_axes_for_entity($pdo, $entity['type_name']);
+    }
+}
+$entityTypeMap = [];
+foreach ($entities as $entity) {
+    $entityTypeMap[(int)$entity['id']] = [
+        'type_name' => $entity['type_name'] ?? '',
+        'type_key' => entity_type_key($entity['type_name'] ?? ''),
+    ];
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_asset') {
-    $name = trim($_POST['asset_name'] ?? '');
     $type = trim($_POST['asset_type'] ?? 'other');
     $primaryEntityId = (int)($_POST['primary_entity_id'] ?? 0);
     $description = trim($_POST['asset_description'] ?? '');
-    if ($name !== '') {
-        $stmt = $pdo->prepare('INSERT INTO assets (project_id, name, asset_type, primary_entity_id, description, status, created_by, created_at) VALUES (:project_id, :name, :asset_type, :primary_entity_id, :description, "active", :created_by, NOW())');
-        $stmt->execute([
-            'project_id' => $projectId,
-            'name' => $name,
-            'asset_type' => $type,
-            'primary_entity_id' => $primaryEntityId ?: null,
-            'description' => $description,
-            'created_by' => current_user()['id'],
-        ]);
-        $message = 'Asset angelegt.';
+    $displayName = trim($_POST['asset_display_name'] ?? '');
+
+    $entityRow = null;
+    if ($primaryEntityId > 0) {
+        $entityStmt = $pdo->prepare('SELECT e.*, t.name AS type_name FROM entities e JOIN entity_types t ON t.id = e.type_id WHERE e.id = :id AND e.project_id = :project_id');
+        $entityStmt->execute(['id' => $primaryEntityId, 'project_id' => $projectId]);
+        $entityRow = $entityStmt->fetch();
+    }
+
+    if (!$entityRow) {
+        $error = 'Bitte eine gültige Entity auswählen, um den Asset-Key zu bestimmen.';
+    } else {
+        $axes = $axesByType[entity_type_key($entityRow['type_name'] ?? '')] ?? load_axes_for_entity($pdo, $entityRow['type_name']);
+        $inputValues = [];
+        foreach ($axes as $axis) {
+            $inputValues[$axis['axis_key']] = trim($_POST['axis_' . $axis['id']] ?? '');
+        }
+        $classValues = normalize_axis_values($axes, $inputValues);
+        $assetKey = build_asset_key($entityRow, $axes, $classValues);
+
+        if (!str_contains($assetKey, 'pending')) {
+            $existingStmt = $pdo->prepare('SELECT id FROM assets WHERE project_id = :project_id AND asset_key = :asset_key LIMIT 1');
+            $existingStmt->execute(['project_id' => $projectId, 'asset_key' => $assetKey]);
+            if ($existingStmt->fetch()) {
+                $error = 'Diese Entity- und Achsenkombination existiert bereits – bitte neue Revision anlegen.';
+            }
+        }
+
+        if (!$error) {
+            $stmt = $pdo->prepare('INSERT INTO assets (project_id, name, asset_key, display_name, asset_type, primary_entity_id, description, status, created_by, created_at) VALUES (:project_id, :name, :asset_key, :display_name, :asset_type, :primary_entity_id, :description, "active", :created_by, NOW())');
+            $stmt->execute([
+                'project_id' => $projectId,
+                'name' => $assetKey,
+                'asset_key' => $assetKey,
+                'display_name' => $displayName !== '' ? $displayName : null,
+                'asset_type' => $type,
+                'primary_entity_id' => $primaryEntityId ?: null,
+                'description' => $description,
+                'created_by' => current_user()['id'],
+            ]);
+            $assetId = (int)$pdo->lastInsertId();
+
+            if (str_contains($assetKey, 'pending')) {
+                $assetKey = build_asset_key($entityRow, $axes, $classValues, $assetId);
+                $pdo->prepare('UPDATE assets SET asset_key = :asset_key, name = :asset_key WHERE id = :id')->execute([
+                    'asset_key' => $assetKey,
+                    'id' => $assetId,
+                ]);
+            }
+
+            replace_asset_classifications($pdo, $assetId, $axes, $classValues);
+            $message = sprintf('Asset %s wurde angelegt.', $assetKey);
+        }
     }
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'update_asset') {
     $assetId = (int)($_POST['asset_id'] ?? 0);
-    $name = trim($_POST['asset_name'] ?? '');
     $type = trim($_POST['asset_type'] ?? 'other');
-    $primaryEntityId = (int)($_POST['primary_entity_id'] ?? 0);
+    $displayName = trim($_POST['asset_display_name'] ?? '');
     $description = trim($_POST['asset_description'] ?? '');
     $status = trim($_POST['asset_status'] ?? 'active');
     $validStatus = ['active', 'deprecated', 'archived'];
 
-    if ($assetId > 0 && $name !== '' && in_array($status, $validStatus, true)) {
-        $stmt = $pdo->prepare('UPDATE assets SET name = :name, asset_type = :asset_type, primary_entity_id = :primary_entity_id, description = :description, status = :status WHERE id = :id AND project_id = :project_id');
+    if ($assetId > 0 && in_array($status, $validStatus, true)) {
+        $stmt = $pdo->prepare('UPDATE assets SET display_name = :display_name, asset_type = :asset_type, description = :description, status = :status WHERE id = :id AND project_id = :project_id');
         $stmt->execute([
-            'name' => $name,
+            'display_name' => $displayName !== '' ? $displayName : null,
             'asset_type' => $type,
-            'primary_entity_id' => $primaryEntityId ?: null,
             'description' => $description,
             'status' => $status,
             'id' => $assetId,
@@ -105,6 +164,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_r
         $assetLookup->execute(['id' => $assetId, 'project_id' => $projectId]);
         $assetContext = $assetLookup->fetch();
         $entityContext = null;
+        $classificationMap = [];
+        $axesForAsset = [];
         if ($assetContext && $assetContext['primary_entity_id']) {
             $entityContext = [
                 'id' => $assetContext['primary_entity_id'],
@@ -112,6 +173,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_r
                 'slug' => $assetContext['primary_entity_slug'],
                 'type' => $assetContext['primary_entity_type'],
             ];
+            $axesForAsset = $axesByType[entity_type_key($assetContext['primary_entity_type'] ?? '')] ?? load_axes_for_entity($pdo, $assetContext['primary_entity_type'] ?? '');
+        }
+        if ($assetContext) {
+            $classificationMap = fetch_asset_classifications($pdo, $assetId);
+        }
+
+        if (!empty($classificationMap['view'])) {
+            $viewLabel = $classificationMap['view'];
         }
 
         $filePath = sanitize_relative_path($filePath);
@@ -124,7 +193,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_r
             }
 
             if ($useTemplate || $filePath === '') {
-                $generated = generate_revision_path($projectRow, $assetContext, $entityContext, $nextVersion, $extension, $viewLabel, [], ['view' => $viewLabel]);
+                $generated = generate_revision_path($projectRow, $assetContext, $entityContext, $nextVersion, $extension, $viewLabel, [], $classificationMap ?: ['view' => $viewLabel]);
                 $filePath = $generated['relative_path'];
             }
         }
@@ -188,7 +257,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_r
                 'review_status' => $status,
             ]);
             $revisionId = (int)$pdo->lastInsertId();
-            $inventoryStmt = $pdo->prepare('INSERT INTO file_inventory (project_id, file_path, file_hash, status, classification_state, asset_revision_id, last_seen_at, file_size_bytes, mime_type) VALUES (:project_id, :file_path, :file_hash, :status, "fully_classified", :asset_revision_id, NOW(), :file_size_bytes, :mime_type) ON DUPLICATE KEY UPDATE file_hash = VALUES(file_hash), status = VALUES(status), classification_state = "fully_classified", asset_revision_id = VALUES(asset_revision_id), last_seen_at = NOW(), file_size_bytes = VALUES(file_size_bytes), mime_type = VALUES(mime_type)');
+            $revisionClassStmt = $pdo->prepare('INSERT INTO revision_classifications (revision_id, axis_id, value_key) VALUES (:revision_id, :axis_id, :value_key)');
+            foreach ($axesForAsset as $axis) {
+                $key = $axis['axis_key'];
+                if (!isset($classificationMap[$key]) || $classificationMap[$key] === '') {
+                    continue;
+                }
+                $revisionClassStmt->execute([
+                    'revision_id' => $revisionId,
+                    'axis_id' => $axis['id'],
+                    'value_key' => $classificationMap[$key],
+                ]);
+            }
+
+            $state = derive_classification_state($axesForAsset, $classificationMap);
+            $inventoryStmt = $pdo->prepare('INSERT INTO file_inventory (project_id, file_path, file_hash, status, classification_state, asset_revision_id, last_seen_at, file_size_bytes, mime_type) VALUES (:project_id, :file_path, :file_hash, :status, :classification_state, :asset_revision_id, NOW(), :file_size_bytes, :mime_type) ON DUPLICATE KEY UPDATE file_hash = VALUES(file_hash), status = VALUES(status), classification_state = :classification_state_update, asset_revision_id = VALUES(asset_revision_id), last_seen_at = NOW(), file_size_bytes = VALUES(file_size_bytes), mime_type = VALUES(mime_type)');
             $inventoryStmt->execute([
                 'project_id' => $projectId,
                 'file_path' => $filePath,
@@ -196,6 +279,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_r
                 'file_size_bytes' => $fileSize,
                 'mime_type' => $mime,
                 'status' => 'linked',
+                'classification_state' => $state,
+                'classification_state_update' => $state,
                 'asset_revision_id' => $revisionId,
             ]);
             $message = 'Revision gespeichert, Datei einsortiert und Metadaten aktualisiert.';
@@ -231,10 +316,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'revie
     }
 }
 
-$entitiesStmt = $pdo->prepare('SELECT id, name FROM entities WHERE project_id = :project_id ORDER BY name');
-$entitiesStmt->execute(['project_id' => $projectId]);
-$entities = $entitiesStmt->fetchAll();
-
 $assetsStmt = $pdo->prepare('SELECT a.*, e.name AS primary_entity_name, e.slug AS primary_entity_slug, et.name AS primary_entity_type FROM assets a LEFT JOIN entities e ON a.primary_entity_id = e.id LEFT JOIN entity_types et ON e.type_id = et.id WHERE a.project_id = :project_id ORDER BY a.created_at DESC LIMIT 50');
 $assetsStmt->execute(['project_id' => $projectId]);
 $assets = $assetsStmt->fetchAll();
@@ -262,17 +343,21 @@ foreach ($assets as $asset) {
         ];
     }
     $hintVersion = $assetVersions[(int)$asset['id']] ?? 1;
-    $generated = generate_revision_path($projectRow, $asset, $entity, $hintVersion, 'png');
+    $classificationMap = fetch_asset_classifications($pdo, (int)$asset['id']);
+    $assetForNaming = $asset;
+    $assetForNaming['asset_key'] = $asset['asset_key'] ?: $asset['name'];
+    $generated = generate_revision_path($projectRow, $assetForNaming, $entity, $hintVersion, 'png', $classificationMap['view'] ?? 'main', [], $classificationMap);
     $namingHints[(int)$asset['id']] = [
         'version' => $hintVersion,
         'suggested' => $generated['relative_path'],
         'template' => $generated['rule'],
         'context' => $generated['context'],
         'asset_type' => $asset['asset_type'],
+        'classification' => $classificationMap,
     ];
 }
 
-$revisionsStmt = $pdo->prepare('SELECT r.*, a.name AS asset_name, u.display_name AS reviewed_by_name FROM asset_revisions r JOIN assets a ON a.id = r.asset_id LEFT JOIN users u ON u.id = r.reviewed_by WHERE a.project_id = :project_id ORDER BY r.created_at DESC, r.version DESC LIMIT 50');
+$revisionsStmt = $pdo->prepare('SELECT r.*, a.name AS asset_name, a.asset_key, a.display_name AS asset_display_name, u.display_name AS reviewed_by_name FROM asset_revisions r JOIN assets a ON a.id = r.asset_id LEFT JOIN users u ON u.id = r.reviewed_by WHERE a.project_id = :project_id ORDER BY r.created_at DESC, r.version DESC LIMIT 50');
 $revisionsStmt->execute(['project_id' => $projectId]);
 $revisions = $revisionsStmt->fetchAll();
 
@@ -316,7 +401,8 @@ render_header('Assets');
                         <table class="table table-sm align-middle mb-0">
                             <thead>
                                 <tr>
-                                    <th>Name</th>
+                                    <th>Anzeige</th>
+                                    <th>Asset-Key</th>
                                     <th>Typ</th>
                                     <th>Entity</th>
                                     <th>Status</th>
@@ -325,7 +411,9 @@ render_header('Assets');
                             <tbody>
                                 <?php foreach ($assets as $asset): ?>
                                     <tr>
-                                        <td><?= htmlspecialchars($asset['name']) ?></td>
+                                        <td><?= htmlspecialchars($asset['display_name'] ?? '—') ?></td>
+                                        <?php $assetKey = $asset['asset_key'] ?: $asset['name']; ?>
+                                        <td><code><?= htmlspecialchars($assetKey) ?></code></td>
                                         <td><code><?= htmlspecialchars($asset['asset_type']) ?></code></td>
                                         <td><?= htmlspecialchars($asset['primary_entity_name'] ?? '–') ?></td>
                                         <td><?= htmlspecialchars($asset['status']) ?></td>
@@ -347,13 +435,18 @@ render_header('Assets');
                         <label class="form-label" for="edit_asset_id">Asset wählen</label>
                         <select class="form-select" name="asset_id" id="edit_asset_id" required>
                             <?php foreach ($assets as $asset): ?>
-                                <option value="<?= (int)$asset['id'] ?>"><?= htmlspecialchars($asset['name']) ?> (<?= htmlspecialchars($asset['asset_type']) ?>)</option>
+                                <?php $label = $asset['display_name'] ?: $asset['asset_key']; ?>
+                                <option value="<?= (int)$asset['id'] ?>"><?= htmlspecialchars($label) ?> (<?= htmlspecialchars($asset['asset_type']) ?>)</option>
                             <?php endforeach; ?>
                         </select>
                     </div>
                     <div class="mb-3">
-                        <label class="form-label" for="edit_asset_name">Name</label>
-                        <input class="form-control" name="asset_name" id="edit_asset_name" required>
+                        <label class="form-label" for="edit_asset_key">Asset-Key</label>
+                        <input class="form-control" id="edit_asset_key" readonly>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="edit_asset_display_name">Anzeigename (optional)</label>
+                        <input class="form-control" name="asset_display_name" id="edit_asset_display_name" placeholder="z. B. Rin – Sommer-Outfit – Front">
                     </div>
                     <div class="mb-3">
                         <label class="form-label" for="edit_asset_type">Typ</label>
@@ -366,13 +459,9 @@ render_header('Assets');
                         </select>
                     </div>
                     <div class="mb-3">
-                        <label class="form-label" for="edit_primary_entity_id">Primäre Entity</label>
-                        <select class="form-select" name="primary_entity_id" id="edit_primary_entity_id">
-                            <option value="">Keine</option>
-                            <?php foreach ($entities as $entity): ?>
-                                <option value="<?= (int)$entity['id'] ?>"><?= htmlspecialchars($entity['name']) ?></option>
-                            <?php endforeach; ?>
-                        </select>
+                        <label class="form-label">Entity</label>
+                        <input class="form-control" id="edit_primary_entity" readonly>
+                        <small class="text-muted">Assets bleiben an ihre Entity + Achsen gebunden.</small>
                     </div>
                     <div class="mb-3">
                         <label class="form-label" for="edit_asset_description">Beschreibung</label>
@@ -397,10 +486,6 @@ render_header('Assets');
                 <form method="post">
                     <input type="hidden" name="action" value="add_asset">
                     <div class="mb-3">
-                        <label class="form-label" for="asset_name">Name</label>
-                        <input class="form-control" name="asset_name" id="asset_name" required>
-                    </div>
-                    <div class="mb-3">
                         <label class="form-label" for="asset_type">Typ</label>
                         <select class="form-select" name="asset_type" id="asset_type">
                             <option value="character_ref">character_ref</option>
@@ -411,13 +496,23 @@ render_header('Assets');
                         </select>
                     </div>
                     <div class="mb-3">
-                        <label class="form-label" for="primary_entity_id">Primäre Entity</label>
-                        <select class="form-select" name="primary_entity_id" id="primary_entity_id">
-                            <option value="">Keine</option>
+                        <label class="form-label" for="primary_entity_id">Entity</label>
+                        <select class="form-select" name="primary_entity_id" id="primary_entity_id" required>
+                            <option value="">Bitte wählen</option>
                             <?php foreach ($entities as $entity): ?>
-                                <option value="<?= (int)$entity['id'] ?>"><?= htmlspecialchars($entity['name']) ?></option>
+                                <option value="<?= (int)$entity['id'] ?>" data-entity-type="<?= htmlspecialchars($entity['type_name'] ?? '') ?>"><?= htmlspecialchars($entity['name']) ?></option>
                             <?php endforeach; ?>
                         </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="asset_display_name">Anzeigename (optional)</label>
+                        <input class="form-control" name="asset_display_name" id="asset_display_name" placeholder="Friendly Label für Listen">
+                        <small class="text-muted">Technischer Asset-Key wird automatisch aus Entity + Achsen gebildet.</small>
+                    </div>
+                    <div class="mb-3" id="asset_axis_fields">
+                        <label class="form-label">Klassifikationsachsen</label>
+                        <div class="text-muted small">Achsen richten sich nach Entity-Typ; Werte definieren den Asset-Key.</div>
+                        <div class="mt-2" id="asset_axis_inputs"></div>
                     </div>
                     <div class="mb-3">
                         <label class="form-label" for="asset_description">Beschreibung</label>
@@ -452,7 +547,14 @@ render_header('Assets');
                             <tbody>
                                 <?php foreach ($revisions as $revision): ?>
                                     <tr>
-                                        <td><?= htmlspecialchars($revision['asset_name']) ?></td>
+                                        <?php 
+                                        $assetKeyLabel = $revision['asset_key'] ?: $revision['asset_name'];
+                                        $assetLabel = $revision['asset_display_name'] ?: $assetKeyLabel;
+                                        ?>
+                                        <td>
+                                            <div class="fw-semibold"><?= htmlspecialchars($assetLabel) ?></div>
+                                            <div class="small text-muted"><code><?= htmlspecialchars($assetKeyLabel) ?></code></div>
+                                        </td>
                                         <td>v<?= (int)$revision['version'] ?></td>
                                         <td>
                                             <?php $thumb = $revisionThumbs[(int)$revision['id']] ?? null; ?>
@@ -504,7 +606,8 @@ render_header('Assets');
                         <select class="form-select" name="asset_id" id="asset_id" required>
                             <option value="">Bitte wählen</option>
                             <?php foreach ($assets as $asset): ?>
-                                <option value="<?= (int)$asset['id'] ?>"><?= htmlspecialchars($asset['name']) ?></option>
+                                <?php $label = $asset['display_name'] ?: $asset['asset_key']; ?>
+                                <option value="<?= (int)$asset['id'] ?>"><?= htmlspecialchars($label) ?> · <code><?= htmlspecialchars($asset['asset_key']) ?></code></option>
                             <?php endforeach; ?>
                         </select>
                     </div>
@@ -579,9 +682,10 @@ render_header('Assets');
 
     const assetMap = <?= json_encode(array_reduce($assets, function ($carry, $asset) {
         $carry[(int)$asset['id']] = [
-            'name' => $asset['name'],
+            'asset_key' => $asset['asset_key'] ?: $asset['name'],
+            'display_name' => $asset['display_name'] ?? '',
             'asset_type' => $asset['asset_type'],
-            'primary_entity_id' => $asset['primary_entity_id'] ? (int)$asset['primary_entity_id'] : '',
+            'primary_entity' => $asset['primary_entity_name'] ?? '',
             'description' => $asset['description'] ?? '',
             'status' => $asset['status'] ?? 'active',
         ];
@@ -589,9 +693,10 @@ render_header('Assets');
     }, [])) ?>;
 
     const select = document.getElementById('edit_asset_id');
-    const nameInput = document.getElementById('edit_asset_name');
+    const keyInput = document.getElementById('edit_asset_key');
+    const displayInput = document.getElementById('edit_asset_display_name');
     const typeSelect = document.getElementById('edit_asset_type');
-    const entitySelect = document.getElementById('edit_primary_entity_id');
+    const entityDisplay = document.getElementById('edit_primary_entity');
     const descInput = document.getElementById('edit_asset_description');
     const statusSelect = document.getElementById('edit_asset_status');
 
@@ -599,15 +704,85 @@ render_header('Assets');
         const assetId = select.value;
         const data = assetMap[assetId];
         if (!data) return;
-        nameInput.value = data.name || '';
+        keyInput.value = data.asset_key || '';
+        displayInput.value = data.display_name || '';
         typeSelect.value = data.asset_type || 'other';
-        entitySelect.value = data.primary_entity_id || '';
+        entityDisplay.value = data.primary_entity || '–';
         descInput.value = data.description || '';
         statusSelect.value = data.status || 'active';
     };
 
     select.addEventListener('change', fillForm);
     fillForm();
+})();
+</script>
+<script>
+(function() {
+    const axesByType = <?= json_encode($axesByType) ?>;
+    const entityTypes = <?= json_encode($entityTypeMap) ?>;
+    const entitySelect = document.getElementById('primary_entity_id');
+    const axisContainer = document.getElementById('asset_axis_inputs');
+
+    if (!entitySelect || !axisContainer) {
+        return;
+    }
+
+    const renderAxes = () => {
+        const entityId = entitySelect.value;
+        const typeInfo = entityTypes[entityId];
+        axisContainer.innerHTML = '';
+
+        if (!typeInfo) {
+            axisContainer.innerHTML = '<div class="text-muted small">Bitte zuerst Entity wählen.</div>';
+            return;
+        }
+
+        const axes = axesByType[typeInfo.type_key] || [];
+        if (!axes.length) {
+            axisContainer.innerHTML = '<div class="text-muted small">Keine Achsen für diesen Typ definiert.</div>';
+            return;
+        }
+
+        axes.forEach((axis) => {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'mb-2';
+            const label = document.createElement('label');
+            label.className = 'form-label small mb-1';
+            label.htmlFor = `axis_${axis.id}`;
+            label.textContent = axis.label;
+            wrapper.appendChild(label);
+
+            if (axis.values && axis.values.length > 0) {
+                const select = document.createElement('select');
+                select.className = 'form-select form-select-sm';
+                select.name = `axis_${axis.id}`;
+                select.id = `axis_${axis.id}`;
+                const emptyOption = document.createElement('option');
+                emptyOption.value = '';
+                emptyOption.textContent = '–';
+                select.appendChild(emptyOption);
+                axis.values.forEach((value) => {
+                    const opt = document.createElement('option');
+                    opt.value = value.value_key;
+                    opt.textContent = value.label;
+                    select.appendChild(opt);
+                });
+                wrapper.appendChild(select);
+            } else {
+                const input = document.createElement('input');
+                input.className = 'form-control form-control-sm';
+                input.name = `axis_${axis.id}`;
+                input.id = `axis_${axis.id}`;
+                input.placeholder = 'Wert';
+                wrapper.appendChild(input);
+            }
+
+            axisContainer.appendChild(wrapper);
+        });
+    };
+
+    entitySelect.addEventListener('change', renderAxes);
+    renderAxes();
 })();
 </script>
 <script>
