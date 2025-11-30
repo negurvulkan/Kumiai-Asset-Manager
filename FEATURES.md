@@ -27,19 +27,20 @@
 - Assets können im UI nachträglich in Name, Typ, primärer Entity, Beschreibung und Status angepasst werden.
 
 ## Dateiinventar & Scanner
-- File-Inventory speichert Projekt, relativen Pfad, Hash, Last-Seen sowie optionales Revision-Mapping mit Status (`untracked`, `linked`, `orphaned`, optional `missing`).
-- Scanner durchsucht rekursiv den Projekt-Root, berechnet Hashes, legt neue Einträge an, markiert neue Dateien als `untracked`, erzeugt neue Revisionen bei Änderungen und markiert gelöschte Dateien als `missing`.
-- Scanner-UI erlaubt manuelle Scans und konfigurierbare Intervalle.
-- Manueller Scanner-Trigger im Files-Bereich für Owner/Admin (direktes Anstoßen des CLI-Scans über die UI).
+- File-Inventory speichert Projekt, relativen Pfad, Hash, Größe, MIME/Metadaten, Last-Seen sowie optionales Revision-Mapping mit Status (`untracked`, `linked`, `orphaned`, optional `missing`).
+- Scanner durchsucht rekursiv den Projekt-Root, berechnet SHA-256-Hashes, legt neue Einträge an, markiert neue Dateien als `untracked`, erzeugt neue Revisionen bei Änderungen und markiert gelöschte Dateien als `missing`.
+- Automatischer Scan beim Öffnen der „Untracked Files“-Übersicht; optionaler Cronjob (z. B. minütlich) für kontinuierliche Synchronisation.
+- Soft-Run-Modus für schnelle Deltas (fügt nur neue Dateien hinzu) plus manuelle Trigger im Files-Bereich für Owner/Admin; Scan-UI zeigt Status und letzte Ausführung.
 
 ## Review-Workflow für untracked Dateien
-- Untracked-Ansicht filtert nach Ordner, Dateityp, Größe und Änderungsdatum.
-- Aktionen: Neues Asset erstellen und verknüpfen, bestehendem Asset als neue Revision zuordnen oder Datei ignorieren/löschen/als orphan markieren.
-- Gescannte Bilddateien erhalten in der Untracked-Ansicht eine Thumbnail-Vorschau zur schnelleren Sichtprüfung.
+- Zentraler „Untracked Files / Review Center“-Screen mit linker Dateiliste, mittlerer Preview/Metadaten (Hash, Pfad, Größe) und rechter Entity/Asset-Zuweisung.
+- File-First-Flow: Datei auswählen → Entity wählen oder per Formular „+ Neue Entity“ anlegen; Asset auswählen oder per Formular „+ Neues Asset aus Datei“ erzeugen (Name-Vorschlag aus Dateiname, Asset-Typ, optionale Beschreibung/Entity-Verknüpfung).
+- Speichern legt neue Asset-Revision an, benennt die Datei nach Naming-Template um, verschiebt sie in den Zielordner, aktualisiert `file_inventory.asset_revision_id` und setzt den Status auf `linked`.
+- Batch-Verarbeitung mit Multi-Select: mehrere Dateien → eine Revisionenfolge eines Assets oder neues Asset + Revisions in einem Schritt; gemeinsame Entity-/Asset-Zuweisung, optional Naming-Template + Move pro Datei. Auto-Vorschläge für Asset-Namen und Entity-Hints aus Ordnerstruktur.
 
 ## Naming-Templates & Auto-Renaming
 - Projekt- und Asset-Typ-bezogene Templates mit Platzhaltern wie `{project}`, `{project_slug}`, `{entity_type}`, `{entity_slug}`, `{asset_type}`, `{view}`, `{version}`, `{date}`, `{datetime}`, `{ext}`.
-- Renaming-Engine benennt Dateien beim Anlegen/Updaten um, verschiebt sie in Zielordner, aktualisiert DB-Pfade, erzeugt Thumbnails und löst Konflikte über Suffixe oder Fehler (Uploads und verknüpfte Inventory-Dateien werden automatisch gemäß Template bewegt).
+- Renaming-Engine nutzt Entity-/Asset-Daten in Echtzeit, benennt Dateien beim Anlegen/Updaten um, verschiebt sie in Zielordner, aktualisiert DB-Pfade, erzeugt Thumbnails und löst Konflikte über Suffixe oder Fehler (Uploads und verknüpfte Inventory-Dateien werden automatisch gemäß Template bewegt).
 
 ## Ordnerstruktur & Autosortierung
 - Standardstruktur mit Charakter-, Szenen-, Background-, Concept-, Export- und Temp-Ordnern.
@@ -54,7 +55,7 @@
 - Projects: Liste, Rollenübersicht und Einstellungen (Root-Pfad, Entity-Typen, Naming-Templates, Ordnerregeln).
 - Entities: Listen/Filter nach Typ, Detailansicht mit Basisinfos, dynamischen Feldern und verknüpften Assets/Entities.
 - Assets: Listen/Details mit Entities, Tags, Revision-Timeline und Aktionen (neue Revision, rename, archivieren).
-- Files/Review: Inventory-Ansicht mit 100-Eintrag-Paginierung und Verknüpfungs-/Orphan-Aktionen für `untracked` Dateien.
+- Files/Review: „Untracked Files / Review Center“ mit Auto-Scan, Preview, Batch-Linking, On-the-fly-Entity/Asset-Anlage und Orphan-Markierung.
 - Users & Roles: Nutzerverwaltung und Projektrollenzuweisung.
 - Settings: Globale Instanz-Einstellungen (E-Mail, Locale etc. optional).
 
@@ -85,5 +86,5 @@
 ## MVP-Hinweise
 - Einstieg über `public/index.php` (Dashboard) bzw. `public/login.php`.
 - Fallback auf `config.example.php`, wenn kein eigenes `includes/config.php` vorhanden ist; Sessions steuerbar über `app.session_name` (Standard `kumiai_session`).
-- File-Inventory listet 100 Einträge und erlaubt Orphan-Markierung oder Revisionserstellung für `untracked` Dateien.
+- Review-Center listet untracked Dateien (Auto-Scan beim Öffnen), bietet Preview, Orphan-Markierung, Batch-Linking und On-the-fly-Asset/Entity-Anlage.
 - Naming-/Folder-Logik aktiv: Templates für Revisionen (mit {project_slug}, {entity_slug}, {view}, {version}, {ext}) schlagen Pfade vor, setzen Pfade beim Speichern und verschieben Dateien in Zielordner, sofern vorhanden.

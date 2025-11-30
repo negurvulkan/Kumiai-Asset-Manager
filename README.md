@@ -55,28 +55,38 @@ Selbstgehostete LAMP-WebApp zur Verwaltung von Kreativprojekten (Manga, Comics, 
 
 ## 7) Dateiinventar & Scanner
 ### 7.1 File Inventory
-- Speichert: project_id, file_path (relativ), file_hash, last_seen_at, optional asset_revision_id.
-- Status: `untracked` (bekannt, aber keinem Asset zugeordnet), `linked` (Teil einer Revision), `orphaned` (Revision gelöscht, Datei liegt noch), optional `missing` bei Löschung.
+- Speichert: project_id, relativen file_path, file_hash, file_size, MIME/Metadaten, last_seen_at, optional asset_revision_id.
+- Status: `untracked` (neu/unbekannt), `linked` (Teil einer Asset-Revision), `orphaned` (Revision gelöscht, Datei liegt noch), optional `missing` bei Löschung.
 
 ### 7.2 Scanner
-- Rekursiver Scan des Projekt-Roots (PHP CLI oder Web-Aktion): Hash berechnen, `file_inventory` anlegen/updaten. Neue Dateien → `untracked`; geänderte verknüpfte Dateien → neue Revision + Inventar-Update; gelöschte Dateien → `missing` oder Delete-Eintrag.
+- Rekursiver Scan des Projekt-Roots (PHP CLI oder Web-Aktion): SHA-256 berechnen, `file_inventory` anlegen/updaten. Neue Dateien → `untracked`; geänderte verknüpfte Dateien → neue Revision + Inventar-Update; gelöschte Dateien → `missing` oder Delete-Eintrag.
+- **Automatische Auslösung:** Öffnen der „Untracked Files“-Übersicht triggert sofort einen Scan. Optional kann ein Cronjob (z. B. minütlich) den Scan kontinuierlich ausführen.
+- **Soft-Run-Modus:** Optionaler Lauf fügt nur neue Dateien hinzu (keine Updates bestehender Einträge), um Hash-Cache und Batch-Updates performant zu halten.
 
 ### 7.3 Scanner-UI
-- Manuelle Scans (Button) und Cron/Task-Intervalle konfigurierbar (Admin/Owner).
+- Manuelle Scans (Button) und Cron/Task-Intervalle konfigurierbar (Admin/Owner); UI zeigt Scan-Status und letzte Ausführung.
 
-## 8) Review-Workflow für untracked Dateien
-### 8.1 Untracked-Ansicht
-- Listet `file_inventory` mit Status `untracked`. Filter: Ordner/Path, Dateityp (PNG/PSD/CLIP), Größe, Änderungsdatum.
+## 8) File-First Review-Center für untracked Dateien
+### 8.1 Zentraler Flow („Untracked Files / Review Center“)
+- Der gesamte Import findet in einer Ansicht statt. Layout: links Liste aller `untracked` Dateien, Mitte mit Preview/Metadaten (Hash, Größe, Pfad), rechts Entity/Asset-Zuweisung.
+- Beim Öffnen lädt die Ansicht den aktuellen Scan und aktualisiert die Liste automatisch.
 
-### 8.2 Aktionen pro untracked Datei
-1. **Neues Asset erstellen & verknüpfen:** Asset-Typ wählen, Entities auswählen, Name/Beschreibung; erstellt Asset + Revision (v1), setzt `status='linked'`, optional Auto-Renaming & Move.
-2. **Bestehendem Asset als neue Revision zuordnen:** Asset auswählen, neue Version, Revision speichern, `status='linked'`.
-3. **Ignorieren/Löschen/Orphan markieren:** Status `orphaned` oder Datei löschen (rechteabhängig).
+### 8.2 File-First Aktionen pro Datei
+1. Datei auswählen → Preview + Metadaten erscheinen.
+2. **Entity-Zuordnung:** Dropdown für bestehende Entities oder Modal „+ Neue Entity anlegen“ (Name, Typ, optionale Metadaten) mit sofortiger Rückgabe in die Auswahl.
+3. **Asset-Zuordnung:** Dropdown für bestehende Assets oder Modal „+ Neues Asset aus dieser Datei erstellen“ (Name-Vorschlag aus Dateiname, Asset-Typ, optionale Beschreibung/Entity-Verknüpfung); erstellt sofort Asset + Revision 1.
+4. **Speichern:** legt neue Asset-Revision an, benennt Datei nach Naming-Template um, verschiebt sie in den Zielordner, aktualisiert `file_inventory.asset_revision_id` und setzt `status='linked'`.
+
+### 8.3 Batch-Verarbeitung
+- Multi-Select für mehrere `untracked` Dateien (eine Auswahl steuert Preview und Formularwerte).
+- Optionen: mehrere Dateien → eine Revisionenfolge eines Assets oder mit einem Klick neues Asset anlegen und alle ausgewählten Dateien als Revisions anhängen.
+- Einheitliche Entity-/Asset-Zuweisung via Dropdown, Naming-Template-Anwendung inkl. Rename/Move pro Datei.
+- Auto-Vorschläge für Asset-Namen aus Dateinamen sowie Entity-Hints aus Ordnerstruktur (z. B. `/import/kei/` → Entity „Kei“).
 
 ## 9) Naming-Templates & Auto-Renaming
 - Templates pro Projekt & Asset-Typ mit Platzhaltern (z. B. `{project}_{entity_type}_{entity_slug}_{asset_type}_{view}_v{version}.{ext}`; `SCN_{scene_slug}_Panel_{panel_number}_{chars}_v{version}.{ext}`; `REF_{character_slug}_TPose_Front_v{version}.{ext}`).
 - Platzhalter: `{project}`, `{project_slug}`, `{entity_type}`, `{entity_slug}`, `{entity_name}`, `{asset_type}`, `{view}`, `{version}`, `{date}`, `{datetime}`, `{ext}`.
-- Renaming-Engine: wendet Template beim Anlegen/Updaten an, benennt Datei um, verschiebt in Zielordner, aktualisiert DB-Pfad; Konflikte via Suffix oder Fehler.
+- Renaming-Engine nutzt Entity-/Asset-Daten in Echtzeit, wendet Templates beim Anlegen/Updaten an, benennt Dateien um, verschiebt sie in Zielordner, aktualisiert DB-Pfad; Konflikte via Suffix oder Fehler.
 
 ## 10) Ordnerstruktur & Autosortierung
 - Standard-Struktur (anpassbar):
@@ -104,7 +114,7 @@ Selbstgehostete LAMP-WebApp zur Verwaltung von Kreativprojekten (Manga, Comics, 
 2. Projects: Liste, Rollen anzeigen, Einstellungen (Root-Pfad, Entity-Typen, Naming-Templates, Ordnerregeln).
 3. Entities: Listen/Filter nach Type, Detail mit Basisinfos, dynamischen Feldern, verknüpften Assets/Entities.
 4. Assets: Liste, Detail mit Infos, Entities, Tags, Revision-Timeline mit Thumbnails; Aktionen: neue Revision, rename, archivieren.
-5. Files/Review: Untracked-Ansicht mit Filtern/Batch-Aktionen; Zuordnung/Neuanlage wie oben.
+5. Files/Review: „Untracked Files / Review Center“ mit Auto-Scan, Preview/Metadaten, Batch-Linking zu Assets und On-the-fly-Erstellung von Entities/Assets.
 6. Users & Roles: Nutzerverwaltung, Projektrollen.
 7. Settings: globale Instanz-Einstellungen (E-Mail, Locale etc. optional).
 
