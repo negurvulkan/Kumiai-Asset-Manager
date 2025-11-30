@@ -11,5 +11,6 @@ return [
     'app' => [
         'base_url' => '/',
         'session_name' => 'kumiai_session',
+        'studio_name' => 'Your Studio',
     ],
 ];

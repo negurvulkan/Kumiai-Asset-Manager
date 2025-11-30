@@ -109,7 +109,7 @@ Selbstgehostete LAMP-WebApp zur Verwaltung von Kreativprojekten (Manga, Comics, 
 7. Settings: globale Instanz-Einstellungen (E-Mail, Locale etc. optional).
 
 ## 13) Setup & Betrieb
-- Einfache Installation via Setup-Skript (DB-Connection, Admin-User, Projekt-Root).
+- Web-Setup unter `/setup.php` ausführen, um DB-Zugangsdaten, Studio-/Firmenname (Branding), Basis-URL und Session-Name einzutragen. Optional kann direkt ein Admin-User (E-Mail/Passwort) angelegt bzw. reaktiviert werden. Das Skript schreibt `includes/config.php` und importiert das Schema.
 - Läuft auf Standard-PHP/MySQL-Hosting ohne Spezialdienste.
 
 ## 14) Nicht-funktionale Anforderungen

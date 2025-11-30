@@ -1,6 +1,10 @@
 <?php
 $configFile = __DIR__ . '/config.php';
 if (!file_exists($configFile)) {
+    if (php_sapi_name() !== 'cli' && basename($_SERVER['PHP_SELF'] ?? '') !== 'setup.php') {
+        header('Location: /setup.php');
+        exit;
+    }
     $configFile = __DIR__ . '/config.example.php';
 }
 $config = require $configFile;
