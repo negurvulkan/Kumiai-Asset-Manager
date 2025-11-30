@@ -83,9 +83,8 @@ Selbstgehostete LAMP-WebApp zur Verwaltung von Kreativprojekten (Manga, Comics, 
 - Einheitliche Entity-/Asset-Zuweisung via Dropdown, Naming-Template-Anwendung inkl. Rename/Move pro Datei.
 - Auto-Vorschläge für Asset-Namen aus Dateinamen sowie Entity-Hints aus Ordnerstruktur (z. B. `/import/kei/` → Entity „Kei“).
 
-## 9) Naming-Templates & Auto-Renaming
-- Templates pro Projekt & Asset-Typ mit Platzhaltern (z. B. `{project}_{entity_type}_{entity_slug}_{asset_type}_{view}_v{version}.{ext}`; `SCN_{scene_slug}_Panel_{panel_number}_{chars}_v{version}.{ext}`; `REF_{character_slug}_TPose_Front_v{version}.{ext}`).
-- Platzhalter: `{project}`, `{project_slug}`, `{entity_type}`, `{entity_slug}`, `{entity_name}`, `{asset_type}`, `{view}`, `{version}`, `{date}`, `{datetime}`, `{ext}`.
+- Templates pro Projekt & Asset-Typ mit Platzhaltern (z. B. `{project}_{entity_type}_{entity_slug}_{asset_type}_{view}_v{version}.{ext}`; `SCN_{scene_slug}_Panel_{panel_number}_{chars}_v{version}.{ext}`; `REF_{character_slug}_{outfit}_{pose}_{view}_v{version}.{ext}`).
+- Platzhalter: `{project}`, `{project_slug}`, `{entity_type}`, `{entity_slug}`, `{entity_name}`, `{asset_type}`, `{character_slug}`, `{outfit}`, `{pose}`, `{view}`, `{version}`, `{date}`, `{datetime}`, `{ext}`.
 - Renaming-Engine nutzt Entity-/Asset-Daten in Echtzeit, wendet Templates beim Anlegen/Updaten an, benennt Dateien um, verschiebt sie in Zielordner, aktualisiert DB-Pfad; Konflikte via Suffix oder Fehler.
 
 ## 10) Ordnerstruktur & Autosortierung
@@ -118,23 +117,33 @@ Selbstgehostete LAMP-WebApp zur Verwaltung von Kreativprojekten (Manga, Comics, 
 6. Users & Roles: Nutzerverwaltung, Projektrollen.
 7. Settings: globale Instanz-Einstellungen (E-Mail, Locale etc. optional).
 
-## 13) Setup & Betrieb
+## 13) Entity-First Workflow & Klassifizierungsachsen
+- **Upload & Rohzuordnung:** Neue Dateien erscheinen im Scanner als `untracked`. Mehrfachauswahl kann direkt einer Entity (z. B. Charakter, Location, Szene) zugeordnet werden. Diese Zuordnung erzeugt `entity_file_links` (`entity_id`, `file_inventory_id`, optionale Notiz) und setzt `classification_state` auf `entity_only`.
+- **Entity-Ansicht „Unklassifizierte Dateien“:** Jede Entity zeigt ihre `entity_only`-Dateien, die gesammelt oder einzeln weiter klassifiziert werden können.
+- **Entity-Ansicht „Unklassifizierte Dateien“:** Jede Entity zeigt ihre `entity_only`-Dateien, die gesammelt oder einzeln weiter klassifiziert werden können. Die Seite `/entity_files.php` erlaubt Preview, Mehrfachauswahl sowie Klassifizierung und Asset-Anlage in einem Schritt.
+- **Schrittweise Klassifizierung:** Optional nacheinander Outfit → Pose → View/Angle. Nach jedem Schritt wird `classification_state` logisch abgeleitet (`entity_only` → `outfit_assigned` → `pose_assigned` → `view_assigned` → `fully_classified`).
+- **On-the-fly-Assets:** Beim Klassifizieren können neue Assets (z. B. Outfit „Schuluniform Sommer“, Pose „T-Pose“) angelegt werden; die aktuelle Revision wird automatisch verknüpft, umbenannt und einsortiert.
+- **Naming-Engine:** Templates unterstützen `{character_slug}`, `{outfit}`, `{pose}`, `{view}`, `{version}`, `{ext}`. Auswertung erfolgt erst, wenn alle notwendigen Achsen gesetzt sind, damit Turnarounds/Layout-Serien konsistent benannt werden.
+- **Flexible Classification Axes:** Achsen sind konfigurierbar über `classification_axes` (Key, Label, applies_to wie `character`, `location`, `scene`, optional vordefinierte Werte). Werte liegen in `classification_axis_values`. Jede Revision erhält ihre Zuordnung in `revision_classifications` (axis_id + value_key). Die UI zeigt Achsen dynamisch je Entity-Typ (z. B. Outfit/Pose/View für Characters, TimeOfDay/Weather/CameraAngle für Locations), Filter greifen automatisch auf diese Achsen zu.
+- **Verwaltung der Classification Axes:** In `entities.php` lassen sich Achsen und optionale Werte ohne Code-Änderung pflegen; die Entity-First-Ansicht bindet diese Achsen sofort in die Schritt-für-Schritt-Klassifizierung ein.
+
+## 14) Setup & Betrieb
 - Web-Setup unter `/setup.php` ausführen, um DB-Zugangsdaten, Studio-/Firmenname (Branding), Basis-URL und Session-Name einzutragen. Optional kann direkt ein Admin-User (E-Mail/Passwort) angelegt bzw. reaktiviert werden. Das Skript schreibt `includes/config.php` und importiert das Schema.
 - Läuft auf Standard-PHP/MySQL-Hosting ohne Spezialdienste.
 
-## 14) Nicht-funktionale Anforderungen
+## 15) Nicht-funktionale Anforderungen
 - Audit-Logging für kritische Aktionen (optional).
 - Thumbnail-Generierung für Bilddateien (CLI-Hook oder PHP-Extension), Caching.
 - Performance: Scanner mit Hash-Cache, Batch-Insert/Update; DB als Quelle der Wahrheit.
 - Sicherheit: Role-Based Access Control auf Projekt-Ebene; CSRF-Schutz; Passwort-Hashing (password_hash).
 
-## 15) Erweiterungen (optional)
+## 16) Erweiterungen (optional)
 - Webhooks/Callbacks nach Review-Events.
 - Export/Backup von Metadaten (JSON/CSV).
 - API-Endpunkte (REST) für Integrationen.
 - Mehrsprachigkeit (i18n) via Sprach-Dateien.
 
-## 16) Erste Implementierung (MVP)
+## 17) Erste Implementierung (MVP)
 - **Code-Basis:** Plain PHP 8.x ohne Framework, Bootstrap 5 für das UI. Einstieg über `public/index.php` (Dashboard) bzw. `public/login.php`.
 - **Konfiguration:**
   - `includes/config.php` (bzw. `config.example.php` als Vorlage) enthält DB-Zugang und Basis-URL. Ohne eigenes `config.php` fällt die App auf die Beispielwerte zurück.

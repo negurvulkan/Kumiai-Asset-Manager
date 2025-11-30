@@ -3,6 +3,7 @@ require_once __DIR__ . '/../includes/layout.php';
 require_once __DIR__ . '/../includes/naming.php';
 require_once __DIR__ . '/../includes/files.php';
 require_once __DIR__ . '/../includes/scanner.php';
+require_once __DIR__ . '/../includes/classification.php';
 require_login();
 
 function parse_selected_inventory_ids(): array
@@ -74,7 +75,7 @@ function link_inventory_batch(PDO $pdo, array $projectRow, int $projectId, array
 
         if ($applyTemplate) {
             $extension = $manualExtension !== '' ? ltrim($manualExtension, '.') : extension_from_path($file['file_path']);
-            $generated = generate_revision_path($projectRow, $asset, $entityContext, $nextVersion, $extension, $viewLabel);
+            $generated = generate_revision_path($projectRow, $asset, $entityContext, $nextVersion, $extension, $viewLabel, [], ['view' => $viewLabel]);
             $targetPath = sanitize_relative_path($generated['relative_path']);
             $source = $projectRoot . $file['file_path'];
             $destination = $projectRoot . $targetPath;
@@ -116,7 +117,7 @@ function link_inventory_batch(PDO $pdo, array $projectRow, int $projectId, array
         ]);
         $revisionId = (int)$pdo->lastInsertId();
 
-        $updateInventory = $pdo->prepare('UPDATE file_inventory SET status = "linked", asset_revision_id = :revision_id, file_path = :file_path, file_hash = :file_hash, mime_type = :mime_type, file_size_bytes = :file_size_bytes, last_seen_at = NOW() WHERE id = :id');
+        $updateInventory = $pdo->prepare('UPDATE file_inventory SET status = "linked", classification_state = "fully_classified", asset_revision_id = :revision_id, file_path = :file_path, file_hash = :file_hash, mime_type = :mime_type, file_size_bytes = :file_size_bytes, last_seen_at = NOW() WHERE id = :id');
         $updateInventory->execute([
             'revision_id' => $revisionId,
             'file_path' => $targetPath,
@@ -187,6 +188,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmt = $pdo->prepare("UPDATE file_inventory SET status = 'orphaned' WHERE project_id = ? AND id IN ($placeholders)");
         $stmt->execute($params);
         $message = 'Ausgewählte Dateien als orphaned markiert.';
+    }
+
+    if ($action === 'assign_entity' && !empty($selectedIds)) {
+        $entityId = (int)($_POST['entity_id'] ?? 0);
+        $note = trim($_POST['entity_note'] ?? '');
+        $entityStmt = $pdo->prepare('SELECT e.*, t.name AS type_name FROM entities e JOIN entity_types t ON t.id = e.type_id WHERE e.id = :id AND e.project_id = :project_id');
+        $entityStmt->execute(['id' => $entityId, 'project_id' => $projectId]);
+        $entity = $entityStmt->fetch();
+        if (!$entity) {
+            $error = 'Entity nicht gefunden.';
+        } else {
+            $placeholders = implode(',', array_fill(0, count($selectedIds), '?'));
+            $insertLink = $pdo->prepare('INSERT IGNORE INTO entity_file_links (entity_id, file_inventory_id, notes, created_at) VALUES (:entity_id, :file_inventory_id, :notes, NOW())');
+            $updateInventory = $pdo->prepare("UPDATE file_inventory SET classification_state = 'entity_only' WHERE id IN ($placeholders) AND project_id = ?");
+            foreach ($selectedIds as $id) {
+                $insertLink->execute([
+                    'entity_id' => $entityId,
+                    'file_inventory_id' => $id,
+                    'notes' => $note,
+                ]);
+            }
+            $updateInventory->execute(array_merge($selectedIds, [$projectId]));
+            $message = sprintf('%d Datei(en) zur Entity "%s" zugeordnet.', count($selectedIds), $entity['name']);
+        }
     }
 
     if ($action === 'link_asset' && $canReview) {
@@ -412,6 +437,21 @@ render_header('Files');
                 <?php endif; ?>
             </div>
             <div class="card-footer">
+                <div class="mb-2">
+                    <label class="form-label" for="bulk_entity">Mit Entity verknüpfen</label>
+                    <select class="form-select form-select-sm" name="entity_id" id="bulk_entity">
+                        <option value="">Entity wählen</option>
+                        <?php foreach ($entities as $entity): ?>
+                            <option value="<?= (int)$entity['id'] ?>"><?= htmlspecialchars($entity['name']) ?> (<?= htmlspecialchars($entity['type_name']) ?>)</option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" for="bulk_entity_note">Notiz</label>
+                    <textarea class="form-control form-control-sm" name="entity_note" id="bulk_entity_note" rows="2" placeholder="optional"></textarea>
+                </div>
+                <button class="btn btn-outline-primary w-100 mb-3" type="button" onclick="submitBulk('assign_entity')">Entity-Zuordnung speichern</button>
+                <hr>
                 <div class="mb-2">
                     <label class="form-label" for="bulk_asset">Mit Asset verknüpfen</label>
                     <select class="form-select form-select-sm" name="asset_id" id="bulk_asset">
