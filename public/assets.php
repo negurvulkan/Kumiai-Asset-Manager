@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/../includes/layout.php';
+require_once __DIR__ . '/../includes/naming.php';
 require_login();
 
 $message = null;
@@ -13,6 +14,15 @@ if (empty($projects)) {
     exit;
 }
 $projectId = isset($_GET['project_id']) ? (int)$_GET['project_id'] : (int)$projects[0]['id'];
+$projectStmt = $pdo->prepare('SELECT * FROM projects WHERE id = :id');
+$projectStmt->execute(['id' => $projectId]);
+$projectRow = $projectStmt->fetch();
+if (!$projectRow) {
+    render_header('Assets');
+    echo '<div class="alert alert-danger">Projekt wurde nicht gefunden.</div>';
+    render_footer();
+    exit;
+}
 $projectContext = null;
 foreach ($projects as $project) {
     if ((int)$project['id'] === $projectId) {
@@ -46,29 +56,57 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_r
     $fileHash = trim($_POST['file_hash'] ?? '');
     $mime = trim($_POST['mime_type'] ?? 'application/octet-stream');
     $status = trim($_POST['review_status'] ?? 'pending');
-    if ($assetId > 0 && $filePath !== '') {
+    $useTemplate = isset($_POST['enforce_template']);
+    $viewLabel = trim($_POST['view_label'] ?? 'main');
+    $manualExtension = trim($_POST['file_extension'] ?? '');
+
+    if ($assetId > 0) {
         $versionStmt = $pdo->prepare('SELECT COALESCE(MAX(version), 0) + 1 AS next_version FROM asset_revisions WHERE asset_id = :asset_id');
         $versionStmt->execute(['asset_id' => $assetId]);
         $nextVersion = (int)$versionStmt->fetchColumn();
-        $stmt = $pdo->prepare('INSERT INTO asset_revisions (asset_id, version, file_path, file_hash, mime_type, file_size_bytes, created_by, created_at, review_status) VALUES (:asset_id, :version, :file_path, :file_hash, :mime_type, :file_size_bytes, :created_by, NOW(), :review_status)');
-        $stmt->execute([
-            'asset_id' => $assetId,
-            'version' => $nextVersion,
-            'file_path' => $filePath,
-            'file_hash' => $fileHash,
-            'mime_type' => $mime,
-            'file_size_bytes' => (int)($_POST['file_size_bytes'] ?? 0),
-            'created_by' => current_user()['id'],
-            'review_status' => $status,
-        ]);
-        $inventoryStmt = $pdo->prepare('INSERT INTO file_inventory (project_id, file_path, file_hash, status, asset_revision_id, last_seen_at) VALUES (:project_id, :file_path, :file_hash, :status, :asset_revision_id, NOW()) ON DUPLICATE KEY UPDATE file_hash = VALUES(file_hash), status = VALUES(status), asset_revision_id = VALUES(asset_revision_id), last_seen_at = NOW()');
-        $inventoryStmt->execute([
-            'project_id' => $projectId,
-            'file_path' => $filePath,
-            'file_hash' => $fileHash,
-            'status' => 'linked',
-            'asset_revision_id' => (int)$pdo->lastInsertId(),
-        ]);
+        $assetLookup = $pdo->prepare('SELECT a.*, e.name AS primary_entity_name, e.slug AS primary_entity_slug, et.name AS primary_entity_type FROM assets a LEFT JOIN entities e ON a.primary_entity_id = e.id LEFT JOIN entity_types et ON e.type_id = et.id WHERE a.id = :id AND a.project_id = :project_id');
+        $assetLookup->execute(['id' => $assetId, 'project_id' => $projectId]);
+        $assetContext = $assetLookup->fetch();
+        $entityContext = null;
+        if ($assetContext && $assetContext['primary_entity_id']) {
+            $entityContext = [
+                'id' => $assetContext['primary_entity_id'],
+                'name' => $assetContext['primary_entity_name'],
+                'slug' => $assetContext['primary_entity_slug'],
+                'type' => $assetContext['primary_entity_type'],
+            ];
+        }
+
+        if ($useTemplate && $assetContext) {
+            $extension = $manualExtension !== '' ? $manualExtension : ($filePath !== '' ? extension_from_path($filePath) : 'png');
+            $generated = generate_revision_path($projectRow, $assetContext, $entityContext, $nextVersion, $extension, $viewLabel);
+            $filePath = $generated['relative_path'];
+        }
+
+        if ($filePath !== '') {
+            $stmt = $pdo->prepare('INSERT INTO asset_revisions (asset_id, version, file_path, file_hash, mime_type, file_size_bytes, created_by, created_at, review_status) VALUES (:asset_id, :version, :file_path, :file_hash, :mime_type, :file_size_bytes, :created_by, NOW(), :review_status)');
+            $stmt->execute([
+                'asset_id' => $assetId,
+                'version' => $nextVersion,
+                'file_path' => $filePath,
+                'file_hash' => $fileHash,
+                'mime_type' => $mime,
+                'file_size_bytes' => (int)($_POST['file_size_bytes'] ?? 0),
+                'created_by' => current_user()['id'],
+                'review_status' => $status,
+            ]);
+            $inventoryStmt = $pdo->prepare('INSERT INTO file_inventory (project_id, file_path, file_hash, status, asset_revision_id, last_seen_at) VALUES (:project_id, :file_path, :file_hash, :status, :asset_revision_id, NOW()) ON DUPLICATE KEY UPDATE file_hash = VALUES(file_hash), status = VALUES(status), asset_revision_id = VALUES(asset_revision_id), last_seen_at = NOW()');
+            $inventoryStmt->execute([
+                'project_id' => $projectId,
+                'file_path' => $filePath,
+                'file_hash' => $fileHash,
+                'status' => 'linked',
+                'asset_revision_id' => (int)$pdo->lastInsertId(),
+            ]);
+            $message = 'Revision gespeichert und Pfad konsistent nach Template abgelegt.';
+        } else {
+            $error = 'Bitte Dateipfad angeben oder Template nutzen.';
+        }
     }
 }
 
@@ -102,9 +140,42 @@ $entitiesStmt = $pdo->prepare('SELECT id, name FROM entities WHERE project_id = 
 $entitiesStmt->execute(['project_id' => $projectId]);
 $entities = $entitiesStmt->fetchAll();
 
-$assetsStmt = $pdo->prepare('SELECT a.*, e.name AS primary_entity_name FROM assets a LEFT JOIN entities e ON a.primary_entity_id = e.id WHERE a.project_id = :project_id ORDER BY a.created_at DESC LIMIT 50');
+$assetsStmt = $pdo->prepare('SELECT a.*, e.name AS primary_entity_name, e.slug AS primary_entity_slug, et.name AS primary_entity_type FROM assets a LEFT JOIN entities e ON a.primary_entity_id = e.id LEFT JOIN entity_types et ON e.type_id = et.id WHERE a.project_id = :project_id ORDER BY a.created_at DESC LIMIT 50');
 $assetsStmt->execute(['project_id' => $projectId]);
 $assets = $assetsStmt->fetchAll();
+
+$assetVersions = [];
+if (!empty($assets)) {
+    $assetIds = array_column($assets, 'id');
+    $placeholders = implode(',', array_fill(0, count($assetIds), '?'));
+    $versionQuery = $pdo->prepare("SELECT asset_id, COALESCE(MAX(version), 0) + 1 AS next_version FROM asset_revisions WHERE asset_id IN ($placeholders) GROUP BY asset_id");
+    $versionQuery->execute($assetIds);
+    foreach ($versionQuery->fetchAll() as $row) {
+        $assetVersions[(int)$row['asset_id']] = (int)$row['next_version'];
+    }
+}
+
+$namingHints = [];
+foreach ($assets as $asset) {
+    $entity = null;
+    if ($asset['primary_entity_id']) {
+        $entity = [
+            'id' => $asset['primary_entity_id'],
+            'name' => $asset['primary_entity_name'],
+            'slug' => $asset['primary_entity_slug'],
+            'type' => $asset['primary_entity_type'],
+        ];
+    }
+    $hintVersion = $assetVersions[(int)$asset['id']] ?? 1;
+    $generated = generate_revision_path($projectRow, $asset, $entity, $hintVersion, 'png');
+    $namingHints[(int)$asset['id']] = [
+        'version' => $hintVersion,
+        'suggested' => $generated['relative_path'],
+        'template' => $generated['rule'],
+        'context' => $generated['context'],
+        'asset_type' => $asset['asset_type'],
+    ];
+}
 
 $revisionsStmt = $pdo->prepare('SELECT r.*, a.name AS asset_name, u.display_name AS reviewed_by_name FROM asset_revisions r JOIN assets a ON a.id = r.asset_id LEFT JOIN users u ON u.id = r.reviewed_by WHERE a.project_id = :project_id ORDER BY r.created_at DESC, r.version DESC LIMIT 50');
 $revisionsStmt->execute(['project_id' => $projectId]);
@@ -271,7 +342,34 @@ render_header('Assets');
                     </div>
                     <div class="mb-3">
                         <label class="form-label" for="file_path">Dateipfad (relativ)</label>
-                        <input class="form-control" name="file_path" id="file_path" placeholder="/01_CHARACTER/kei/ref_v1.png" required>
+                        <div class="input-group">
+                            <input class="form-control" name="file_path" id="file_path" placeholder="/01_CHARACTER/kei/ref_v01.png" required>
+                            <button class="btn btn-outline-secondary" type="button" id="apply_template">Template einsetzen</button>
+                        </div>
+                        <div class="form-text" id="naming_hint">Pfadvorschlag erscheint nach Asset-Auswahl.</div>
+                    </div>
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label" for="view_label">View/Shot Label</label>
+                            <input class="form-control" name="view_label" id="view_label" value="main" placeholder="front">
+                            <div class="form-text">Fließt in den Platzhalter <code>{view}</code> ein.</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="file_extension">Dateiendung</label>
+                            <input class="form-control" name="file_extension" id="file_extension" value="png" list="known_extensions">
+                            <datalist id="known_extensions">
+                                <option value="png">
+                                <option value="jpg">
+                                <option value="psd">
+                                <option value="clip">
+                                <option value="tif">
+                            </datalist>
+                            <div class="form-text">Wird automatisch als <code>{ext}</code> genutzt.</div>
+                        </div>
+                    </div>
+                    <div class="form-check mb-3 mt-2">
+                        <input class="form-check-input" type="checkbox" name="enforce_template" id="enforce_template" checked>
+                        <label class="form-check-label" for="enforce_template">Pfad beim Speichern nach Template ableiten</label>
                     </div>
                     <div class="mb-3">
                         <label class="form-label" for="file_hash">Datei-Hash</label>
@@ -301,4 +399,78 @@ render_header('Assets');
         </div>
     </div>
 </div>
+<script>
+(function() {
+    const hintMap = <?= json_encode($namingHints) ?>;
+    const rules = <?= json_encode(default_naming_rules()) ?>;
+    const assetSelect = document.getElementById('asset_id');
+    const viewInput = document.getElementById('view_label');
+    const extInput = document.getElementById('file_extension');
+    const filePathInput = document.getElementById('file_path');
+    const hintBox = document.getElementById('naming_hint');
+    const applyBtn = document.getElementById('apply_template');
+
+    if (!assetSelect || !viewInput || !extInput || !filePathInput || !hintBox) {
+        return;
+    }
+
+    const slugify = (value) => {
+        return (value || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'item';
+    };
+
+    const renderPattern = (pattern, context) => {
+        return pattern.replace(/\{([a-z_]+)\}/g, (_, key) => context[key] ?? `{${key}}`);
+    };
+
+    const buildContext = (assetId) => {
+        const base = hintMap[assetId];
+        if (!base) {
+            return null;
+        }
+        const ext = (extInput.value || 'png').replace(/^\./, '');
+        const version = (base.version ?? base.context.version ?? '01').toString().padStart(2, '0');
+        return {
+            ...base.context,
+            view: slugify(viewInput.value || 'main'),
+            ext,
+            version,
+        };
+    };
+
+    const updateHint = () => {
+        const assetId = assetSelect.value;
+        if (!assetId || !hintMap[assetId]) {
+            hintBox.textContent = 'Pfadvorschlag erscheint nach Asset-Auswahl.';
+            return null;
+        }
+        const context = buildContext(assetId);
+        const rule = rules[hintMap[assetId].asset_type] ?? rules.other;
+        const folder = '/' + renderPattern(rule.folder, context).replace(/^\/+/, '');
+        const fileName = renderPattern(rule.template, context);
+        const suggested = folder.replace(/\/+$/, '') + '/' + fileName;
+        hintBox.textContent = 'Pfadvorschlag: ' + suggested;
+        if (!filePathInput.value) {
+            filePathInput.value = suggested;
+        }
+        return suggested.replace(/\/+/g, '/');
+    };
+
+    if (applyBtn) {
+        applyBtn.addEventListener('click', () => {
+            const suggestion = updateHint();
+            if (suggestion) {
+                filePathInput.value = suggestion;
+            }
+        });
+    }
+
+    ['change', 'input'].forEach((evt) => {
+        assetSelect.addEventListener(evt, updateHint);
+        viewInput.addEventListener(evt, updateHint);
+        extInput.addEventListener(evt, updateHint);
+    });
+
+    updateHint();
+})();
+</script>
 <?php render_footer(); ?>

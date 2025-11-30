@@ -62,7 +62,7 @@
 - Assets & Revisionen über `public/assets.php`; Inventory wird bei verknüpften Revisionen auf `linked` gesetzt.
 - Review-Status einer Revision im Revisions-Panel setzbar (Owner/Admin/Editor) mit Notiz, Reviewer und Zeitstempel.
 - File-Inventory-Workflow via `scripts/scan.php <project_id>` und `public/files.php` zum Markieren, Verknüpfen oder Anlegen neuer Revisionen.
-- Naming-/Folder-Logik derzeit als Platzhalter; Dateipfade werden manuell oder aus dem Scanner übernommen.
+- Naming-/Folder-Logik mit Default-Templates pro Asset-Typ (Character/Background/Scene/Concept/Other), automatischer Pfadberechnung, Konfliktauflösung per Suffix und optionalem Auto-Move beim Verknüpfen.
 - Deployment: Webroot auf `public/`; PHP-CLI für `scripts/scan.php`; Thumbnails/Uploads im MVP noch nicht integriert.
 
 ## Nicht-funktionale Anforderungen
@@ -81,4 +81,4 @@
 - Einstieg über `public/index.php` (Dashboard) bzw. `public/login.php`.
 - Fallback auf `config.example.php`, wenn kein eigenes `includes/config.php` vorhanden ist; Sessions steuerbar über `app.session_name` (Standard `kumiai_session`).
 - File-Inventory listet 100 Einträge und erlaubt Orphan-Markierung oder Revisionserstellung für `untracked` Dateien.
-- Naming-/Folder-Logik noch rudimentär; Pfade werden manuell eingetragen oder aus dem Scanner übernommen.
+- Naming-/Folder-Logik aktiv: Templates für Revisionen (mit {project_slug}, {entity_slug}, {view}, {version}, {ext}) schlagen Pfade vor, setzen Pfade beim Speichern und verschieben Dateien in Zielordner, sofern vorhanden.
