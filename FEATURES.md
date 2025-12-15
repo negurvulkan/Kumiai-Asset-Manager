@@ -18,6 +18,7 @@
 - Projekt-spezifische Entity-Typen (z. B. character, location, scene, chapter, prop, background, item, creature).
 - Entities mit Feldern für Projekt, Typ, Name, Slug, Beschreibung und Metadaten-JSON (Erfassung im UI inkl. JSON-Validierung und Anzeige).
 - Optional: dynamische Zusatzfelder pro Entity-Typ.
+- Zusatzinformationen (Entity Infos): Beliebige Anzahl an Textblöcken (z. B. Hintergrundgeschichte, Persönlichkeit) mit Markdown-Support, direkt in der Detailansicht bearbeitbar.
 - Entities lassen sich inkl. Slug, Typ, Beschreibung und Metadaten im UI aktualisieren.
 
 ## Assets, Versionen & Datei-Bezug

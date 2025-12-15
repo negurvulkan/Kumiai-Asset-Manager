@@ -91,6 +91,20 @@ render_header('Entity: ' . htmlspecialchars($entity['name']));
                 <?php endif; ?>
             </div>
         </div>
+
+        <div class="card shadow-sm mb-3">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="card-title h6 mb-0">Zusatzinformationen</h5>
+                <button class="btn btn-sm btn-outline-primary" id="btn-add-info" title="Neue Info hinzufügen">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-plus-lg" viewBox="0 0 16 16">
+                      <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="card-body p-0" id="entity-infos-container">
+                <div class="text-center p-3 text-muted">Lade Informationen...</div>
+            </div>
+        </div>
     </div>
 
     <div class="col-md-8">
@@ -134,5 +148,169 @@ render_header('Entity: ' . htmlspecialchars($entity['name']));
         <?php endif; ?>
     </div>
 </div>
+
+<!-- Modal -->
+<div class="modal fade" id="infoModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="infoModalLabel">Info hinzufügen</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <form id="infoForm">
+            <input type="hidden" id="infoId" name="id">
+            <input type="hidden" name="entity_id" value="<?= (int)$entity['id'] ?>">
+            <div class="mb-3">
+                <label for="infoTitle" class="form-label">Titel</label>
+                <input type="text" class="form-control" id="infoTitle" name="title" required placeholder="z. B. Hintergrundgeschichte">
+            </div>
+            <div class="mb-3">
+                <label for="infoContent" class="form-label">Inhalt</label>
+                <textarea class="form-control" id="infoContent" name="content" rows="10" required placeholder="Markdown wird unterstützt..."></textarea>
+                <div class="form-text">Markdown wird unterstützt.</div>
+            </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Abbrechen</button>
+        <button type="button" class="btn btn-primary" id="btn-save-info">Speichern</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const entityId = <?= (int)$entity['id'] ?>;
+    const container = document.getElementById('entity-infos-container');
+    const modalEl = document.getElementById('infoModal');
+    const modal = new bootstrap.Modal(modalEl);
+    const form = document.getElementById('infoForm');
+    const saveBtn = document.getElementById('btn-save-info');
+    const addBtn = document.getElementById('btn-add-info');
+
+    // Load Infos
+    const loadInfos = () => {
+        fetch(`/ajax_entity_infos.php?action=list&entity_id=${entityId}`)
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    renderInfos(data.data);
+                } else {
+                    container.innerHTML = `<div class="p-3 text-danger">Fehler: ${data.error}</div>`;
+                }
+            })
+            .catch(err => {
+                container.innerHTML = `<div class="p-3 text-danger">Fehler beim Laden.</div>`;
+                console.error(err);
+            });
+    };
+
+    const renderInfos = (infos) => {
+        if (!infos || infos.length === 0) {
+            container.innerHTML = '<div class="p-3 text-muted text-center small">Keine Zusatzinformationen vorhanden.</div>';
+            return;
+        }
+
+        container.innerHTML = '';
+        infos.forEach(info => {
+            const rawHtml = marked.parse(info.content || '');
+            const html = DOMPurify.sanitize(rawHtml);
+            const item = document.createElement('div');
+            item.className = 'border-bottom p-3';
+            item.innerHTML = `
+                <div class="d-flex justify-content-between align-items-start mb-2">
+                    <h6 class="fw-bold mb-0 text-primary">${escapeHtml(info.title)}</h6>
+                    <div class="btn-group btn-group-sm">
+                        <button class="btn btn-light btn-sm text-secondary py-0 px-1 btn-edit" data-id="${info.id}">Edit</button>
+                        <button class="btn btn-light btn-sm text-danger py-0 px-1 btn-delete" data-id="${info.id}">Del</button>
+                    </div>
+                </div>
+                <div class="markdown-body small text-secondary" style="overflow-wrap: anywhere;">${html}</div>
+            `;
+            container.appendChild(item);
+
+            const btnEdit = item.querySelector('.btn-edit');
+            btnEdit.infoData = info; // Attach data directly
+            btnEdit.addEventListener('click', (e) => openEdit(e.currentTarget.infoData));
+
+            const btnDelete = item.querySelector('.btn-delete');
+            btnDelete.infoId = info.id;
+            btnDelete.addEventListener('click', (e) => deleteInfo(e.currentTarget.infoId));
+        });
+    };
+
+    const escapeHtml = (unsafe) => {
+        return unsafe
+             .replace(/&/g, "&amp;")
+             .replace(/</g, "&lt;")
+             .replace(/>/g, "&gt;")
+             .replace(/"/g, "&quot;")
+             .replace(/'/g, "&#039;");
+    };
+
+    const openEdit = (info) => {
+        document.getElementById('infoModalLabel').textContent = 'Info bearbeiten';
+        document.getElementById('infoId').value = info.id;
+        document.getElementById('infoTitle').value = info.title;
+        document.getElementById('infoContent').value = info.content;
+        modal.show();
+    };
+
+    addBtn.addEventListener('click', () => {
+        document.getElementById('infoModalLabel').textContent = 'Info hinzufügen';
+        document.getElementById('infoId').value = ''; // Empty for new
+        form.reset();
+        modal.show();
+    });
+
+    saveBtn.addEventListener('click', () => {
+        const id = document.getElementById('infoId').value;
+        const action = id ? 'update' : 'create';
+        const formData = new FormData(form);
+        formData.append('action', action);
+
+        fetch('/ajax_entity_infos.php', {
+            method: 'POST',
+            body: formData
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                modal.hide();
+                loadInfos();
+            } else {
+                alert('Fehler: ' + (data.error || 'Unbekannt'));
+            }
+        })
+        .catch(err => alert('Fehler beim Speichern.'));
+    });
+
+    const deleteInfo = (id) => {
+        if (!confirm('Wirklich löschen?')) return;
+        const formData = new FormData();
+        formData.append('action', 'delete');
+        formData.append('id', id);
+
+        fetch('/ajax_entity_infos.php', {
+            method: 'POST',
+            body: formData
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                loadInfos();
+            } else {
+                alert('Fehler: ' + data.error);
+            }
+        });
+    };
+
+    loadInfos();
+});
+</script>
 
 <?php render_footer(); ?>

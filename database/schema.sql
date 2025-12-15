@@ -160,3 +160,14 @@ CREATE TABLE asset_classifications (
     FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE,
     FOREIGN KEY (axis_id) REFERENCES classification_axes(id) ON DELETE CASCADE
 );
+
+CREATE TABLE entity_infos (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    entity_id INT NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    content TEXT,
+    sort_order INT NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE CASCADE
+);
