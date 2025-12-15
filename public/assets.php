@@ -411,9 +411,17 @@ render_header('Assets');
                             <tbody>
                                 <?php foreach ($assets as $asset): ?>
                                     <tr>
-                                        <td><?= htmlspecialchars($asset['display_name'] ?? '—') ?></td>
+                                        <td>
+                                            <a href="asset_details.php?id=<?= (int)$asset['id'] ?>" class="text-decoration-none">
+                                                <?= htmlspecialchars($asset['display_name'] ?? '—') ?>
+                                            </a>
+                                        </td>
                                         <?php $assetKey = $asset['asset_key'] ?: $asset['name']; ?>
-                                        <td><code><?= htmlspecialchars($assetKey) ?></code></td>
+                                        <td>
+                                            <a href="asset_details.php?id=<?= (int)$asset['id'] ?>" class="text-decoration-none code-link">
+                                                <code><?= htmlspecialchars($assetKey) ?></code>
+                                            </a>
+                                        </td>
                                         <td><code><?= htmlspecialchars($asset['asset_type']) ?></code></td>
                                         <td><?= htmlspecialchars($asset['primary_entity_name'] ?? '–') ?></td>
                                         <td><?= htmlspecialchars($asset['status']) ?></td>
@@ -552,8 +560,16 @@ render_header('Assets');
                                         $assetLabel = $revision['asset_display_name'] ?: $assetKeyLabel;
                                         ?>
                                         <td>
-                                            <div class="fw-semibold"><?= htmlspecialchars($assetLabel) ?></div>
-                                            <div class="small text-muted"><code><?= htmlspecialchars($assetKeyLabel) ?></code></div>
+                                            <div class="fw-semibold">
+                                                <a href="asset_details.php?id=<?= (int)$revision['asset_id'] ?>" class="text-decoration-none text-dark">
+                                                    <?= htmlspecialchars($assetLabel) ?>
+                                                </a>
+                                            </div>
+                                            <div class="small text-muted">
+                                                <a href="asset_details.php?id=<?= (int)$revision['asset_id'] ?>" class="text-decoration-none text-muted">
+                                                    <code><?= htmlspecialchars($assetKeyLabel) ?></code>
+                                                </a>
+                                            </div>
                                         </td>
                                         <td>v<?= (int)$revision['version'] ?></td>
                                         <td>
