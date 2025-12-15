@@ -314,13 +314,20 @@ render_header('Entities');
                             <tbody>
                                 <?php foreach ($entities as $entity): ?>
                                     <tr>
-                                        <td><?= htmlspecialchars($entity['name']) ?></td>
+                                        <td>
+                                            <a href="/entity_details.php?entity_id=<?= (int)$entity['id'] ?>" class="text-decoration-none fw-semibold">
+                                                <?= htmlspecialchars($entity['name']) ?>
+                                            </a>
+                                        </td>
                                         <td><code><?= htmlspecialchars($entity['slug']) ?></code></td>
                                         <td><?= htmlspecialchars($entity['type_name']) ?></td>
                                         <td class="small"><pre class="mb-0 bg-light p-2 border rounded" style="max-width: 320px; white-space: pre-wrap; word-break: break-word;"><?= htmlspecialchars($entity['metadata_json'] ?: '{}') ?></pre></td>
                                         <td><?= htmlspecialchars($entity['created_at']) ?></td>
                                         <td>
-                                            <a class="btn btn-sm btn-outline-primary" href="/entity_files.php?entity_id=<?= (int)$entity['id'] ?>">Klassifizieren</a>
+                                            <div class="btn-group btn-group-sm">
+                                                <a class="btn btn-outline-secondary" href="/entity_details.php?entity_id=<?= (int)$entity['id'] ?>">Details</a>
+                                                <a class="btn btn-outline-primary" href="/entity_files.php?entity_id=<?= (int)$entity['id'] ?>">Klassifizieren</a>
+                                            </div>
                                         </td>
                                     </tr>
                                 <?php endforeach; ?>
