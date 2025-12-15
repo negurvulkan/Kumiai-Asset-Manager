@@ -55,6 +55,13 @@ $projectRoot = rtrim($projectRow['root_path'], '/');
 
 $canReview = in_array($projectContext['role'], ['owner', 'admin', 'editor'], true);
 
+// Load Axes for Entity (needed for display and logic)
+$axesForAsset = [];
+if ($asset['primary_entity_id']) {
+    $axesForAsset = load_axes_for_entity($pdo, $asset['primary_entity_type'] ?? '');
+}
+$classificationMap = fetch_asset_classifications($pdo, $assetId);
+
 // POST Handling
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
@@ -66,19 +73,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $status = trim($_POST['asset_status'] ?? 'active');
         $validStatus = ['active', 'deprecated', 'archived'];
 
+        // Collect Axis Values
+        $inputValues = [];
+        foreach ($axesForAsset as $axis) {
+            $inputValues[$axis['axis_key']] = trim($_POST['axis_' . $axis['id']] ?? '');
+        }
+        $classValues = normalize_axis_values($axesForAsset, $inputValues);
+
+        // Build new Asset Key
+        $entityInfo = [
+            'slug' => $asset['primary_entity_slug'],
+            'name' => $asset['primary_entity_name']
+        ];
+        // Use ID for misc/unassigned if needed
+        $newAssetKey = build_asset_key($entityInfo, $axesForAsset, $classValues, $assetId);
+
         if (in_array($status, $validStatus, true)) {
-            $updateStmt = $pdo->prepare('UPDATE assets SET display_name = :display_name, asset_type = :asset_type, description = :description, status = :status WHERE id = :id');
-            $updateStmt->execute([
-                'display_name' => $displayName !== '' ? $displayName : null,
-                'asset_type' => $type,
-                'description' => $description,
-                'status' => $status,
-                'id' => $assetId,
-            ]);
-            $message = 'Asset aktualisiert.';
-            // Refresh Asset Data
-            $stmt->execute(['id' => $assetId]);
-            $asset = $stmt->fetch();
+            // Check Collision if key changed
+            if ($newAssetKey !== $asset['asset_key']) {
+                $existingStmt = $pdo->prepare('SELECT id FROM assets WHERE project_id = :project_id AND asset_key = :asset_key AND id != :id LIMIT 1');
+                $existingStmt->execute(['project_id' => $projectId, 'asset_key' => $newAssetKey, 'id' => $assetId]);
+                if ($existingStmt->fetch()) {
+                    $error = 'Diese Klassifizierung führt zu einem Asset-Key, der bereits existiert.';
+                }
+            }
+
+            if (!$error) {
+                $updateStmt = $pdo->prepare('UPDATE assets SET display_name = :display_name, asset_type = :asset_type, description = :description, status = :status, asset_key = :asset_key, name = :name WHERE id = :id');
+                $updateStmt->execute([
+                    'display_name' => $displayName !== '' ? $displayName : null,
+                    'asset_type' => $type,
+                    'description' => $description,
+                    'status' => $status,
+                    'asset_key' => $newAssetKey,
+                    'name' => $newAssetKey,
+                    'id' => $assetId,
+                ]);
+
+                // Update Classifications
+                replace_asset_classifications($pdo, $assetId, $axesForAsset, $classValues);
+
+                $message = 'Asset aktualisiert.';
+                // Refresh Asset Data
+                $stmt->execute(['id' => $assetId]);
+                $asset = $stmt->fetch();
+                $classificationMap = fetch_asset_classifications($pdo, $assetId);
+            }
         }
     }
 
@@ -101,9 +141,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $nextVersion = (int)$versionStmt->fetchColumn();
 
         $entityContext = null;
-        $classificationMap = [];
-        $axesForAsset = [];
-
         if ($asset['primary_entity_id']) {
             $entityContext = [
                 'id' => $asset['primary_entity_id'],
@@ -111,9 +148,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'slug' => $asset['primary_entity_slug'],
                 'type' => $asset['primary_entity_type'],
             ];
-            $axesForAsset = load_axes_for_entity($pdo, $asset['primary_entity_type'] ?? '');
         }
-        $classificationMap = fetch_asset_classifications($pdo, $assetId);
 
         if (!empty($classificationMap['view'])) {
             $viewLabel = $classificationMap['view'];
@@ -268,7 +303,6 @@ foreach ($revisions as $revision) {
 
 // Naming Hint Setup
 $entityContext = null;
-$classificationMap = fetch_asset_classifications($pdo, $assetId);
 if ($asset['primary_entity_id']) {
     $entityContext = [
         'id' => $asset['primary_entity_id'],
@@ -355,15 +389,28 @@ render_header('Asset: ' . htmlspecialchars($asset['display_name'] ?? $asset['ass
                         </div>
                     </div>
 
-                    <?php if (!empty($classificationMap)): ?>
-                    <div class="mb-3">
-                        <label class="form-label text-muted small mb-1">Klassifizierung</label>
-                        <ul class="list-unstyled small ps-2 border-start">
-                            <?php foreach ($classificationMap as $axis => $val): ?>
-                                <li><strong class="text-muted"><?= htmlspecialchars($axis) ?>:</strong> <?= htmlspecialchars($val) ?></li>
+                    <?php if (!empty($axesForAsset)): ?>
+                        <div class="mb-3 border-top pt-2">
+                            <div class="small text-muted mb-2">Klassifizierung (definiert Asset-Key)</div>
+                            <?php foreach ($axesForAsset as $axis): ?>
+                                <div class="mb-2">
+                                    <label class="form-label small mb-0" for="axis_<?= $axis['id'] ?>"><?= htmlspecialchars($axis['label']) ?></label>
+                                    <?php
+                                    $currentVal = $classificationMap[$axis['axis_key']] ?? '';
+                                    if (!empty($axis['values'])):
+                                    ?>
+                                        <select class="form-select form-select-sm" name="axis_<?= $axis['id'] ?>" id="axis_<?= $axis['id'] ?>">
+                                            <option value="">–</option>
+                                            <?php foreach ($axis['values'] as $v): ?>
+                                                <option value="<?= htmlspecialchars($v['value_key']) ?>" <?= $currentVal === $v['value_key'] ? 'selected' : '' ?>><?= htmlspecialchars($v['label']) ?></option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                    <?php else: ?>
+                                        <input class="form-control form-control-sm" name="axis_<?= $axis['id'] ?>" id="axis_<?= $axis['id'] ?>" value="<?= htmlspecialchars($currentVal) ?>">
+                                    <?php endif; ?>
+                                </div>
                             <?php endforeach; ?>
-                        </ul>
-                    </div>
+                        </div>
                     <?php endif; ?>
 
                     <div class="mb-3">
