@@ -399,9 +399,14 @@ render_header('Files');
             <input type="hidden" name="action" id="bulk-action" value="">
             <input type="hidden" name="selected_ids" id="bulk-selected" value="">
             <div class="card-header d-flex justify-content-between align-items-center">
-                <div>
-                    <div class="fw-semibold">Untracked Files (<?= count($inventory) ?>)</div>
-                    <small class="text-muted">Automatisch gescannt – Mehrfachauswahl möglich.</small>
+                <div class="d-flex align-items-center gap-3">
+                    <div class="form-check mb-0">
+                        <input class="form-check-input" type="checkbox" id="select_all_files" aria-label="Alle Dateien auswählen">
+                    </div>
+                    <div>
+                        <div class="fw-semibold">Untracked Files (<?= count($inventory) ?>)</div>
+                        <small class="text-muted">Automatisch gescannt – Mehrfachauswahl möglich.</small>
+                    </div>
                 </div>
                 <div class="d-flex gap-2">
                     <button class="btn btn-sm btn-outline-secondary" type="button" onclick="submitBulk('mark_orphan')">Orphan</button>
@@ -634,10 +639,39 @@ function submitBulk(action) {
     document.getElementById('bulk-form').submit();
 }
 
+const selectAllCheckbox = document.getElementById('select_all_files');
+
+function updateSelectAllState() {
+    if (!selectAllCheckbox) return;
+    const checkboxes = document.querySelectorAll('.file-checkbox');
+    if (checkboxes.length === 0) {
+        selectAllCheckbox.checked = false;
+        selectAllCheckbox.disabled = true;
+    } else {
+        const allChecked = Array.from(checkboxes).every(c => c.checked);
+        selectAllCheckbox.checked = allChecked;
+        selectAllCheckbox.disabled = false;
+    }
+}
+
 document.querySelectorAll('.file-checkbox').forEach((checkbox) => {
-    checkbox.addEventListener('change', pushSelection);
+    checkbox.addEventListener('change', () => {
+        updateSelectAllState();
+        pushSelection();
+    });
 });
 
+if (selectAllCheckbox) {
+    selectAllCheckbox.addEventListener('change', function() {
+        const isChecked = this.checked;
+        document.querySelectorAll('.file-checkbox').forEach((checkbox) => {
+            checkbox.checked = isChecked;
+        });
+        pushSelection();
+    });
+}
+
+updateSelectAllState();
 pushSelection();
 </script>
 <?php render_footer(); ?>
