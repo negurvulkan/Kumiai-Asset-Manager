@@ -6,7 +6,7 @@ require_login();
 
 $entityId = isset($_GET['entity_id']) ? (int)$_GET['entity_id'] : 0;
 
-$entityStmt = $pdo->prepare('SELECT e.*, t.name AS type_name FROM entities e JOIN entity_types t ON t.id = e.type_id WHERE e.id = :id');
+$entityStmt = $pdo->prepare('SELECT e.*, t.name AS type_name, t.field_definitions FROM entities e JOIN entity_types t ON t.id = e.type_id WHERE e.id = :id');
 $entityStmt->execute(['id' => $entityId]);
 $entity = $entityStmt->fetch();
 
@@ -101,9 +101,55 @@ render_header('Entity: ' . htmlspecialchars($entity['name']));
                 <h5 class="card-title">Beschreibung</h5>
                 <p class="card-text"><?= nl2br(htmlspecialchars($entity['description'] ?? '')) ?></p>
 
-                <?php if (!empty($entity['metadata_json'])): ?>
-                    <h6 class="mt-3">Metadaten</h6>
-                    <pre class="bg-light p-2 border rounded small" style="white-space: pre-wrap;"><?= htmlspecialchars($entity['metadata_json']) ?></pre>
+                <?php
+                    $metadata = json_decode($entity['metadata_json'] ?: '{}', true);
+                    $defs = !empty($entity['field_definitions']) ? json_decode($entity['field_definitions'], true) : [];
+                    $shownKeys = [];
+                ?>
+
+                <?php if (!empty($defs)): ?>
+                    <h6 class="mt-3 border-bottom pb-2">Eigenschaften</h6>
+                    <dl class="row mb-0">
+                        <?php foreach ($defs as $def): ?>
+                            <?php
+                                $key = $def['key'] ?? '';
+                                $shownKeys[] = $key;
+                                $val = $metadata[$key] ?? null;
+                            ?>
+                            <?php if ($val !== null && $val !== ''): ?>
+                                <dt class="col-sm-5 text-muted small"><?= htmlspecialchars($def['label'] ?? $key) ?></dt>
+                                <dd class="col-sm-7">
+                                    <?php
+                                        if ($def['type'] === 'boolean') {
+                                            echo $val ? 'Ja' : 'Nein';
+                                        } else {
+                                            echo htmlspecialchars((string)$val);
+                                        }
+                                    ?>
+                                </dd>
+                            <?php endif; ?>
+                        <?php endforeach; ?>
+                    </dl>
+                <?php endif; ?>
+
+                <?php
+                    // Show remaining metadata
+                    $remaining = array_diff_key($metadata, array_flip($shownKeys));
+                ?>
+                <?php if (!empty($remaining)): ?>
+                    <h6 class="mt-3 border-bottom pb-2">Weitere Daten</h6>
+                    <dl class="row mb-0">
+                        <?php foreach ($remaining as $k => $v): ?>
+                            <dt class="col-sm-5 text-muted small"><?= htmlspecialchars($k) ?></dt>
+                            <dd class="col-sm-7">
+                                <?php if (is_array($v) || is_object($v)): ?>
+                                    <pre class="mb-0 bg-light p-1 rounded" style="font-size:0.8em"><?= htmlspecialchars(json_encode($v)) ?></pre>
+                                <?php else: ?>
+                                    <?= htmlspecialchars((string)$v) ?>
+                                <?php endif; ?>
+                            </dd>
+                        <?php endforeach; ?>
+                    </dl>
                 <?php endif; ?>
             </div>
         </div>
