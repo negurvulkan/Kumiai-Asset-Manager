@@ -81,6 +81,22 @@ render_header('Entity: ' . htmlspecialchars($entity['name']));
 <div class="row g-4">
     <div class="col-md-4">
         <div class="card shadow-sm mb-3">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="card-title h6 mb-0">Profilbilder</h5>
+                <button class="btn btn-sm btn-outline-primary" id="btn-add-profile" title="Bild hochladen" style="display: none;">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-upload" viewBox="0 0 16 16">
+                      <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5"/>
+                      <path d="M7.646 1.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1-.708.708L8.5 2.707V11.5a.5.5 0 0 1-1 0V2.707L5.354 4.854a.5.5 0 1 1-.708-.708z"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="card-body p-2" id="profile-pictures-container">
+                <div class="text-center p-3 text-muted">Lade Bilder...</div>
+            </div>
+            <input type="file" id="profile-upload-input" style="display: none;" accept="image/*">
+        </div>
+
+        <div class="card shadow-sm mb-3">
             <div class="card-body">
                 <h5 class="card-title">Beschreibung</h5>
                 <p class="card-text"><?= nl2br(htmlspecialchars($entity['description'] ?? '')) ?></p>
@@ -193,6 +209,107 @@ document.addEventListener('DOMContentLoaded', () => {
     const addBtn = document.getElementById('btn-add-info');
 
     // Load Infos
+    // Profile Pictures Logic
+    const profileContainer = document.getElementById('profile-pictures-container');
+    const profileAddBtn = document.getElementById('btn-add-profile');
+    const profileInput = document.getElementById('profile-upload-input');
+
+    const loadProfiles = () => {
+        fetch(`/ajax_profile_pictures.php?action=list&entity_id=${entityId}`)
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    renderProfiles(data.data);
+                } else {
+                    profileContainer.innerHTML = `<div class="text-danger small p-2">${data.error}</div>`;
+                }
+            })
+            .catch(err => console.error(err));
+    };
+
+    const renderProfiles = (pics) => {
+        profileContainer.innerHTML = '';
+        if (pics.length === 0) {
+            profileContainer.innerHTML = '<div class="text-center text-muted small p-2">Keine Profilbilder.</div>';
+        } else {
+            const row = document.createElement('div');
+            row.className = 'd-flex flex-wrap gap-2 justify-content-center';
+            pics.forEach(pic => {
+                const wrapper = document.createElement('div');
+                wrapper.className = 'position-relative';
+                wrapper.style.width = '100px';
+                wrapper.style.height = '100px';
+
+                const img = document.createElement('img');
+                img.src = pic.url || '#';
+                img.className = 'img-thumbnail w-100 h-100';
+                img.style.objectFit = 'cover';
+
+                const delBtn = document.createElement('button');
+                delBtn.className = 'btn btn-danger btn-sm position-absolute top-0 end-0 p-0 d-flex align-items-center justify-content-center';
+                delBtn.style.width = '20px';
+                delBtn.style.height = '20px';
+                delBtn.style.transform = 'translate(30%, -30%)';
+                delBtn.innerHTML = '&times;';
+                delBtn.title = 'Löschen';
+                delBtn.onclick = () => deleteProfile(pic.id);
+
+                wrapper.appendChild(img);
+                wrapper.appendChild(delBtn);
+                row.appendChild(wrapper);
+            });
+            profileContainer.appendChild(row);
+        }
+
+        // Toggle add button
+        profileAddBtn.style.display = pics.length < 3 ? 'block' : 'none';
+    };
+
+    const deleteProfile = (id) => {
+        if (!confirm('Bild wirklich löschen?')) return;
+        const formData = new FormData();
+        formData.append('action', 'delete');
+        formData.append('id', id);
+
+        fetch('/ajax_profile_pictures.php', { method: 'POST', body: formData })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) loadProfiles();
+                else alert('Fehler: ' + data.error);
+            });
+    };
+
+    profileAddBtn.addEventListener('click', () => profileInput.click());
+
+    profileInput.addEventListener('change', () => {
+        if (profileInput.files.length === 0) return;
+        const file = profileInput.files[0];
+        const formData = new FormData();
+        formData.append('action', 'upload');
+        formData.append('entity_id', entityId);
+        formData.append('file', file);
+
+        profileAddBtn.disabled = true;
+
+        fetch('/ajax_profile_pictures.php', { method: 'POST', body: formData })
+            .then(res => res.json())
+            .then(data => {
+                profileAddBtn.disabled = false;
+                profileInput.value = '';
+                if (data.success) {
+                    loadProfiles();
+                } else {
+                    alert('Fehler: ' + data.error);
+                }
+            })
+            .catch(err => {
+                profileAddBtn.disabled = false;
+                alert('Upload Fehler');
+            });
+    });
+
+    loadProfiles();
+
     const loadInfos = () => {
         fetch(`/ajax_entity_infos.php?action=list&entity_id=${entityId}`)
             .then(res => res.json())

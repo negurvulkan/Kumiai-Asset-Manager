@@ -20,6 +20,7 @@
 - Optional: dynamische Zusatzfelder pro Entity-Typ.
 - Zusatzinformationen (Entity Infos): Beliebige Anzahl an Textblöcken (z. B. Hintergrundgeschichte, Persönlichkeit) mit Markdown-Support, direkt in der Detailansicht bearbeitbar.
 - Entities lassen sich inkl. Slug, Typ, Beschreibung und Metadaten im UI aktualisieren.
+- Profilbilder: Möglichkeit, 1-3 Bilder hochzuladen, die als Profilbilder für die Entity dienen (Upload via UI, Speicherung im Projekt-Meta-Ordner).
 
 ## Assets, Versionen & Datei-Bezug
 - Assets mit Projektbezug, **asset_key** (deterministisch aus Entity-Slug + Achsenkombination), optionalem display_name, Asset-Typ, primärer Entity, optionalen Entity-Verknüpfungen, Status (`active`, `deprecated`, `archived`), Beschreibung sowie Audit-Feldern. Existiert eine Entity+Achsen-Kombination bereits, wird sie automatisch wiederverwendet; achsenlose Assets nutzen `{entity_slug}_misc_{id}` als Fallback-Key.
