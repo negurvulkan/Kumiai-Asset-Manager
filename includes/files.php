@@ -119,3 +119,17 @@ function thumbnail_public_if_exists(int $projectId, string $relativePath): ?stri
     $paths = thumbnail_target_paths($projectId, $relativePath);
     return file_exists($paths['absolute']) ? $paths['public'] : null;
 }
+
+function format_file_size(?int $bytes, int $precision = 2): string
+{
+    if ($bytes === null) {
+        return '—';
+    }
+    $units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    $bytes = max($bytes, 0);
+    $pow = floor(($bytes ? log($bytes) : 0) / log(1024));
+    $pow = min($pow, count($units) - 1);
+    $bytes /= pow(1024, $pow);
+
+    return round($bytes, $precision) . ' ' . $units[$pow];
+}
