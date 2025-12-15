@@ -125,7 +125,7 @@ render_header('Entity: ' . htmlspecialchars($entity['name']));
                                 </div>
                             </div>
                             <div class="card-footer bg-white p-2 text-end">
-                                <a href="/assets.php?project_id=<?= $projectId ?>#asset-<?= $asset['id'] ?>" class="btn btn-sm btn-outline-primary stretched-link">Details</a>
+                                <a href="asset_details.php?id=<?= (int)$asset['id'] ?>" class="btn btn-sm btn-outline-primary stretched-link">Details</a>
                             </div>
                         </div>
                     </div>
