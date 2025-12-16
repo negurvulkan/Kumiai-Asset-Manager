@@ -583,6 +583,7 @@ function openTypeModal(data = null) {
     if (data && data.field_definitions) {
         try { defs = JSON.parse(data.field_definitions); } catch(e){}
     }
+    if (!Array.isArray(defs)) defs = [];
     defs.forEach(d => addFieldRow(d));
 
     typeModal.show();
@@ -651,6 +652,7 @@ function openEntityModal(data = null) {
     if (data && data.metadata_json) {
         try { currentEntityMetadata = (typeof data.metadata_json === 'string') ? JSON.parse(data.metadata_json) : data.metadata_json; } catch(e){}
     }
+    if (!currentEntityMetadata) currentEntityMetadata = {};
 
     metadataArea.value = JSON.stringify(currentEntityMetadata, null, 2);
 
@@ -675,6 +677,7 @@ function renderEntityFields() {
 
     let defs = [];
     try { defs = JSON.parse(typeMap[typeId].field_definitions); } catch(e){}
+    if (!Array.isArray(defs)) defs = [];
 
     if (defs.length === 0) {
         dynContainer.style.display = 'none';
