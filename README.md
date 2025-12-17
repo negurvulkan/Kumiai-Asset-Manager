@@ -170,3 +170,9 @@ Selbstgehostete LAMP-WebApp zur Verwaltung von Kreativprojekten (Manga, Comics, 
   - `public/files.php` listet Inventory (100 Einträge) und erlaubt für `untracked` Dateien: als `orphaned` markieren oder per Asset-Auswahl eine Revision anlegen (Status `linked`).
 - **Naming/Folder-Logik:** Noch als Platzhalter; Dateipfade werden aktuell manuell eingetragen bzw. aus dem Scanner übernommen.
 - **Deployment-Hinweise:** Webroot auf `public/` zeigen lassen; PHP-CLI für `scripts/scan.php` verfügbar machen (Cron). Thumbnails/Uploads sind im MVP noch nicht integriert.
+
+## 18) KI-gestützte Klassifizierung & Audit
+- Service-Layer unter `includes/services/` (OpenAI Vision + Embeddings) mit strikter JSON-Schema-Validierung, automatischen Retries bei invalidem Output und Cosine-Similarity in PHP.
+- Pipeline: lokales Bild laden → Vision-Analyse (asset_type grob/fein, subjects, scene_hints, attributes, free_caption, analysis_confidence) → Regel-Kandidaten (horse / location / stable / teen+school+uniform) → Embeddings aus Caption + normalisierten Stichworten → TopK-Sortierung, Auto-Assign über Score-Threshold & Margin; sonst Review-Queue.
+- Audit-Logging (`ai_audit_logs`) protokolliert Input/Output/Confidence/Fehler. Ergebnisse landen in `ai_review_queue` (auto_assigned vs. needs_review) und sind nur für berechtigte Rollen (owner/admin/editor) über `public/ajax_ai_classification.php` abrufbar.
+- Konfiguration über `openai`-Block in `includes/config.php` (API-Key, Modelle, Schwellenwerte); DB-Upgrade via `database/upgrade_v4_to_v5.sql`.

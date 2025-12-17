@@ -92,6 +92,11 @@
 - Performance-Fokus durch Hash-Cache, Batch-Operationen und DB als Source of Truth.
 - Sicherheit: Role-Based Access Control, CSRF-Schutz, Passwort-Hashing.
 
+## KI-gestützte Klassifizierung & Embeddings
+- Dedizierter Service-Layer (`includes/services/ai_client.php`, `includes/services/ai_classification.php`) mit OpenAI Vision + Embeddings, strikter JSON-Schema-Validierung und automatischen Retries bei ungültigem Output.
+- Pipeline: lokales Bild laden → Vision-Analyse (asset_type grob/fein, subjects, scene_hints, attributes, free_caption, analysis_confidence) → Kandidaten-Retrieval via Regeln (horse / location / stable / teen+school+uniform) → Embeddings aus Caption + Stichworten → Cosine-Similarity (TopK) → Auto-Assign mit Score-Threshold & Margin, sonst Review-Queue-Eintrag.
+- Audit-Logging aller Aktionen (`ai_audit_logs` inkl. Input/Output/Confidence/Fehler) und Review-/Auto-Assign-Status in `ai_review_queue`; Trigger nur für berechtigte Rollen (owner/admin/editor) über `public/ajax_ai_classification.php`.
+
 ## Erweiterungen (optional)
 - Webhooks/Callbacks nach Review-Events.
 - Export/Backup von Metadaten (JSON/CSV).
