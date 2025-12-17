@@ -565,188 +565,198 @@ const entityTypes = <?= json_encode($entityTypes) ?>;
 const typeMap = {};
 entityTypes.forEach(t => typeMap[t.id] = t);
 
-// --- Entity Type Modal Logic ---
-const typeModalEl = document.getElementById('typeModal');
-const typeModal = new bootstrap.Modal(typeModalEl);
-const fieldsBody = document.getElementById('fieldsBody');
+document.addEventListener('DOMContentLoaded', () => {
+    // --- Entity Type Modal Logic ---
+    const typeModalEl = document.getElementById('typeModal');
+    const typeModal = new bootstrap.Modal(typeModalEl);
+    const fieldsBody = document.getElementById('fieldsBody');
 
-function openTypeModal(data = null) {
-    if (typeof data === 'string') {
-        try { data = JSON.parse(data); } catch (e) { console.warn('Konnte Entity-Typ nicht parsen', e); data = null; }
-    }
-    document.getElementById('typeAction').value = data ? 'update_type' : 'add_type';
-    document.getElementById('typeId').value = data ? data.id : '';
-    document.getElementById('typeName').value = data ? data.name : '';
-    document.getElementById('typeDesc').value = data ? data.description : '';
-    document.getElementById('typeModalTitle').innerText = data ? 'Typ bearbeiten' : 'Neuer Typ';
-
-    // Fields
-    fieldsBody.innerHTML = '';
-    let defs = [];
-    if (data && data.field_definitions) {
-        try { defs = JSON.parse(data.field_definitions); } catch(e){}
-    }
-    if (!Array.isArray(defs)) defs = [];
-    defs.forEach(d => addFieldRow(d));
-
-    typeModal.show();
-}
-
-function addFieldRow(data = {}) {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-        <td><input class="form-control form-control-sm" value="${data.key || ''}" placeholder="race" oninput="updateFieldJson()"></td>
-        <td><input class="form-control form-control-sm" value="${data.label || ''}" placeholder="Race" oninput="updateFieldJson()"></td>
-        <td>
-            <select class="form-select form-select-sm" onchange="updateFieldJson()">
-                <option value="text" ${data.type === 'text' ? 'selected' : ''}>Text</option>
-                <option value="number" ${data.type === 'number' ? 'selected' : ''}>Number</option>
-                <option value="select" ${data.type === 'select' ? 'selected' : ''}>Select</option>
-                <option value="boolean" ${data.type === 'boolean' ? 'selected' : ''}>Boolean</option>
-            </select>
-        </td>
-        <td><input class="form-control form-control-sm" value="${data.options || ''}" placeholder="A,B,C" oninput="updateFieldJson()"></td>
-        <td class="text-center"><button type="button" class="btn btn-sm btn-outline-danger py-0 px-1" onclick="this.closest('tr').remove(); updateFieldJson()">&times;</button></td>
-    `;
-    fieldsBody.appendChild(tr);
-    updateFieldJson();
-}
-
-function updateFieldJson() {
-    const rows = fieldsBody.querySelectorAll('tr');
-    const data = [];
-    rows.forEach(tr => {
-        const inputs = tr.querySelectorAll('input, select');
-        const key = inputs[0].value.trim();
-        if (key) {
-            data.push({
-                key: key,
-                label: inputs[1].value.trim(),
-                type: inputs[2].value,
-                options: inputs[3].value.trim()
-            });
-        }
-    });
-    document.getElementById('typeFieldDefs').value = JSON.stringify(data);
-}
-document.getElementById('typeForm').addEventListener('submit', () => updateFieldJson()); // Ensure update on submit
-
-// --- Entity Modal Logic ---
-const entityModalEl = document.getElementById('entityModal');
-const entityModal = new bootstrap.Modal(entityModalEl);
-const entityTypeIdSel = document.getElementById('entityTypeId');
-const dynContainer = document.getElementById('dynamicFieldsContainer');
-const dynBody = document.getElementById('dynamicFieldsBody');
-const metadataArea = document.getElementById('entityMetadata');
-
-let currentEntityMetadata = {};
-
-function openEntityModal(data = null) {
-    document.getElementById('entityAction').value = data ? 'update_entity' : 'add_entity';
-    document.getElementById('entityId').value = data ? data.id : '';
-    document.getElementById('entityName').value = data ? data.name : '';
-    document.getElementById('entitySlug').value = data ? data.slug : '';
-    document.getElementById('entityDesc').value = data ? data.description : '';
-    document.getElementById('entityModalTitle').innerText = data ? 'Entity bearbeiten' : 'Neue Entity';
-
-    entityTypeIdSel.value = data ? data.type_id : '';
-
-    currentEntityMetadata = {};
-    if (data && data.metadata_json) {
-        try { currentEntityMetadata = (typeof data.metadata_json === 'string') ? JSON.parse(data.metadata_json) : data.metadata_json; } catch(e){}
-    }
-    if (!currentEntityMetadata) currentEntityMetadata = {};
-
-    metadataArea.value = JSON.stringify(currentEntityMetadata, null, 2);
-
-    renderEntityFields();
-    entityModal.show();
-}
-
-function generateSlug(val) {
-    if (document.getElementById('entityAction').value === 'update_entity') return; // Don't auto-change on edit
-    const slug = val.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-    document.getElementById('entitySlug').value = slug;
-}
-
-function renderEntityFields() {
-    const typeId = entityTypeIdSel.value;
-    dynBody.innerHTML = '';
-
-    if (!typeId || !typeMap[typeId] || !typeMap[typeId].field_definitions) {
-        dynContainer.style.display = 'none';
-        return;
-    }
-
-    let defs = [];
-    try { defs = JSON.parse(typeMap[typeId].field_definitions); } catch(e){}
-    if (!Array.isArray(defs)) defs = [];
-
-    if (defs.length === 0) {
-        dynContainer.style.display = 'none';
-        return;
-    }
-
-    dynContainer.style.display = 'block';
-
-    defs.forEach(def => {
-        const col = document.createElement('div');
-        col.className = 'col-md-6';
-
-        const label = document.createElement('label');
-        label.className = 'form-label small fw-bold';
-        label.innerText = def.label || def.key;
-
-        let input;
-        const val = currentEntityMetadata[def.key] !== undefined ? currentEntityMetadata[def.key] : '';
-
-        if (def.type === 'select') {
-            input = document.createElement('select');
-            input.className = 'form-select form-select-sm';
-            input.innerHTML = '<option value="">-</option>';
-            if (def.options) {
-                def.options.split(',').forEach(opt => {
-                    const o = opt.trim();
-                    const optEl = document.createElement('option');
-                    optEl.value = o;
-                    optEl.innerText = o;
-                    if (String(o) === String(val)) optEl.selected = true;
-                    input.appendChild(optEl);
+    function updateFieldJson() {
+        const rows = fieldsBody.querySelectorAll('tr');
+        const data = [];
+        rows.forEach(tr => {
+            const inputs = tr.querySelectorAll('input, select');
+            const key = inputs[0].value.trim();
+            if (key) {
+                data.push({
+                    key: key,
+                    label: inputs[1].value.trim(),
+                    type: inputs[2].value,
+                    options: inputs[3].value.trim()
                 });
             }
-        } else if (def.type === 'boolean') {
-            input = document.createElement('select');
-            input.className = 'form-select form-select-sm';
-            input.innerHTML = '<option value="false">Nein</option><option value="true">Ja</option>';
-            input.value = (val === true || val === 'true') ? 'true' : 'false';
-        } else {
-            input = document.createElement('input');
-            input.className = 'form-control form-control-sm';
-            input.type = def.type === 'number' ? 'number' : 'text';
-            input.value = val;
+        });
+        document.getElementById('typeFieldDefs').value = JSON.stringify(data);
+    }
+
+    function addFieldRow(data = {}) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td><input class="form-control form-control-sm" value="${data.key || ''}" placeholder="race" oninput="updateFieldJson()"></td>
+            <td><input class="form-control form-control-sm" value="${data.label || ''}" placeholder="Race" oninput="updateFieldJson()"></td>
+            <td>
+                <select class="form-select form-select-sm" onchange="updateFieldJson()">
+                    <option value="text" ${data.type === 'text' ? 'selected' : ''}>Text</option>
+                    <option value="number" ${data.type === 'number' ? 'selected' : ''}>Number</option>
+                    <option value="select" ${data.type === 'select' ? 'selected' : ''}>Select</option>
+                    <option value="boolean" ${data.type === 'boolean' ? 'selected' : ''}>Boolean</option>
+                </select>
+            </td>
+            <td><input class="form-control form-control-sm" value="${data.options || ''}" placeholder="A,B,C" oninput="updateFieldJson()"></td>
+            <td class="text-center"><button type="button" class="btn btn-sm btn-outline-danger py-0 px-1" onclick="this.closest('tr').remove(); updateFieldJson()">&times;</button></td>
+        `;
+        fieldsBody.appendChild(tr);
+        updateFieldJson();
+    }
+
+    function openTypeModal(data = null) {
+        if (typeof data === 'string') {
+            try { data = JSON.parse(data); } catch (e) { console.warn('Konnte Entity-Typ nicht parsen', e); data = null; }
+        }
+        document.getElementById('typeAction').value = data ? 'update_type' : 'add_type';
+        document.getElementById('typeId').value = data ? data.id : '';
+        document.getElementById('typeName').value = data ? data.name : '';
+        document.getElementById('typeDesc').value = data ? data.description : '';
+        document.getElementById('typeModalTitle').innerText = data ? 'Typ bearbeiten' : 'Neuer Typ';
+
+        // Fields
+        fieldsBody.innerHTML = '';
+        let defs = [];
+        if (data && data.field_definitions) {
+            try { defs = JSON.parse(data.field_definitions); } catch(e){}
+        }
+        if (!Array.isArray(defs)) defs = [];
+        defs.forEach(d => addFieldRow(d));
+
+        typeModal.show();
+    }
+
+    document.getElementById('typeForm').addEventListener('submit', () => updateFieldJson()); // Ensure update on submit
+
+    // --- Entity Modal Logic ---
+    const entityModalEl = document.getElementById('entityModal');
+    const entityModal = new bootstrap.Modal(entityModalEl);
+    const entityTypeIdSel = document.getElementById('entityTypeId');
+    const dynContainer = document.getElementById('dynamicFieldsContainer');
+    const dynBody = document.getElementById('dynamicFieldsBody');
+    const metadataArea = document.getElementById('entityMetadata');
+
+    let currentEntityMetadata = {};
+
+    function renderEntityFields() {
+        const typeId = entityTypeIdSel.value;
+        dynBody.innerHTML = '';
+
+        if (!typeId || !typeMap[typeId] || !typeMap[typeId].field_definitions) {
+            dynContainer.style.display = 'none';
+            return;
         }
 
-        input.onchange = (e) => {
-            let v = e.target.value;
-            if (def.type === 'boolean') v = (v === 'true');
-            if (def.type === 'number') v = parseFloat(v);
+        let defs = [];
+        try { defs = JSON.parse(typeMap[typeId].field_definitions); } catch(e){}
+        if (!Array.isArray(defs)) defs = [];
 
-            currentEntityMetadata[def.key] = v;
-            metadataArea.value = JSON.stringify(currentEntityMetadata, null, 2);
-        };
+        if (defs.length === 0) {
+            dynContainer.style.display = 'none';
+            return;
+        }
 
-        col.appendChild(label);
-        col.appendChild(input);
-        dynBody.appendChild(col);
+        dynContainer.style.display = 'block';
+
+        defs.forEach(def => {
+            const col = document.createElement('div');
+            col.className = 'col-md-6';
+
+            const label = document.createElement('label');
+            label.className = 'form-label small fw-bold';
+            label.innerText = def.label || def.key;
+
+            let input;
+            const val = currentEntityMetadata[def.key] !== undefined ? currentEntityMetadata[def.key] : '';
+
+            if (def.type === 'select') {
+                input = document.createElement('select');
+                input.className = 'form-select form-select-sm';
+                input.innerHTML = '<option value=\"\">-</option>';
+                if (def.options) {
+                    def.options.split(',').forEach(opt => {
+                        const o = opt.trim();
+                        const optEl = document.createElement('option');
+                        optEl.value = o;
+                        optEl.innerText = o;
+                        if (String(o) === String(val)) optEl.selected = true;
+                        input.appendChild(optEl);
+                    });
+                }
+            } else if (def.type === 'boolean') {
+                input = document.createElement('select');
+                input.className = 'form-select form-select-sm';
+                input.innerHTML = '<option value=\"false\">Nein</option><option value=\"true\">Ja</option>';
+                input.value = (val === true || val === 'true') ? 'true' : 'false';
+            } else {
+                input = document.createElement('input');
+                input.className = 'form-control form-control-sm';
+                input.type = def.type === 'number' ? 'number' : 'text';
+                input.value = val;
+            }
+
+            input.onchange = (e) => {
+                let v = e.target.value;
+                if (def.type === 'boolean') v = (v === 'true');
+                if (def.type === 'number') v = parseFloat(v);
+
+                currentEntityMetadata[def.key] = v;
+                metadataArea.value = JSON.stringify(currentEntityMetadata, null, 2);
+            };
+
+            col.appendChild(label);
+            col.appendChild(input);
+            dynBody.appendChild(col);
+        });
+    }
+
+    function openEntityModal(data = null) {
+        document.getElementById('entityAction').value = data ? 'update_entity' : 'add_entity';
+        document.getElementById('entityId').value = data ? data.id : '';
+        document.getElementById('entityName').value = data ? data.name : '';
+        document.getElementById('entitySlug').value = data ? data.slug : '';
+        document.getElementById('entityDesc').value = data ? data.description : '';
+        document.getElementById('entityModalTitle').innerText = data ? 'Entity bearbeiten' : 'Neue Entity';
+
+        entityTypeIdSel.value = data ? data.type_id : '';
+
+        currentEntityMetadata = {};
+        if (data && data.metadata_json) {
+            try { currentEntityMetadata = (typeof data.metadata_json === 'string') ? JSON.parse(data.metadata_json) : data.metadata_json; } catch(e){}
+        }
+        if (!currentEntityMetadata) currentEntityMetadata = {};
+
+        metadataArea.value = JSON.stringify(currentEntityMetadata, null, 2);
+
+        renderEntityFields();
+        entityModal.show();
+    }
+
+    function generateSlug(val) {
+        if (document.getElementById('entityAction').value === 'update_entity') return; // Don't auto-change on edit
+        const slug = val.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+        document.getElementById('entitySlug').value = slug;
+    }
+
+    // Sync metadata textarea back to object if edited manually
+    metadataArea.addEventListener('input', () => {
+        try {
+            currentEntityMetadata = JSON.parse(metadataArea.value);
+            renderEntityFields(); // Re-render to reflect manual changes
+        } catch(e) {}
     });
-}
 
-// Sync metadata textarea back to object if edited manually
-metadataArea.addEventListener('input', () => {
-    try {
-        currentEntityMetadata = JSON.parse(metadataArea.value);
-        renderEntityFields(); // Re-render to reflect manual changes
-    } catch(e) {}
+    window.updateFieldJson = updateFieldJson;
+    window.openTypeModal = openTypeModal;
+    window.addFieldRow = addFieldRow;
+    window.openEntityModal = openEntityModal;
+    window.generateSlug = generateSlug;
+    window.renderEntityFields = renderEntityFields;
 });
 
 </script>
