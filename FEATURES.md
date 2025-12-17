@@ -43,6 +43,7 @@
 - Speichern legt neue Asset-Revision an, benennt die Datei nach Naming-Template um, verschiebt sie in den Zielordner, aktualisiert `file_inventory.asset_revision_id` und setzt den Status auf `linked`.
 - Batch-Verarbeitung mit Multi-Select: mehrere Dateien → eine Revisionenfolge eines Assets oder neues Asset + Revisions in einem Schritt; gemeinsame Entity-/Asset-Zuweisung, optional Naming-Template + Move pro Datei. Auto-Vorschläge für Asset-Namen und Entity-Hints aus Ordnerstruktur.
 - Vor-Klassifizierung auf Inventory-Ebene: Bei der Entity-Zuordnung können Achsenwerte direkt gespeichert werden (`inventory_classifications`), `classification_state` wird daraus abgeleitet und in der Detailansicht angezeigt.
+- Revisionsanlage prüft Achsen: Nur vollständig befüllte und zu den `asset_classifications` passende Werte erzeugen neue Revisionen; andernfalls werden lediglich `classification_state` und Vor-Klassifizierungen aktualisiert (sichtbarer Hinweis im UI).
 
 ## Entity-First & Klassifizierungsachsen
 - Neue Dateien bleiben `untracked`, können aber per Multi-Select sofort einer Entity zugeordnet werden (`entity_file_links`), wodurch `classification_state` auf `entity_only` gesetzt wird und die Files in der Entity-Ansicht unter „Unklassifiziert“ erscheinen.
