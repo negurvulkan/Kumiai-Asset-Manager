@@ -56,6 +56,21 @@ $projectRow = $projectStmt->fetch();
 $projectRoot = rtrim($projectRow['root_path'], '/');
 
 $canReview = in_array($projectContext['role'], ['owner', 'admin', 'editor'], true);
+$prepassData = null;
+$prepassStmt = $pdo->prepare('SELECT * FROM asset_ai_prepass WHERE asset_id = :asset_id LIMIT 1');
+$prepassStmt->execute(['asset_id' => $assetId]);
+$prepassRow = $prepassStmt->fetch();
+if ($prepassRow) {
+    $decoded = json_decode($prepassRow['result_json'] ?? '', true);
+    if (is_array($decoded)) {
+        $prepassData = $decoded + [
+            'model' => $prepassRow['model'] ?? '',
+            'confidence_overall' => (float)($prepassRow['confidence_overall'] ?? 0.0),
+            'created_at' => $prepassRow['created_at'] ?? null,
+            'updated_at' => $prepassRow['updated_at'] ?? null,
+        ];
+    }
+}
 
 // Load Axes for Entity (needed for display and logic)
 $axesForAsset = [];
@@ -101,6 +116,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         if ($result['success'] ?? false) {
                             $aiResults[$revId] = $result;
                             $message = 'KI-Lauf abgeschlossen.';
+                            if (!empty($result['prepass'])) {
+                                $prepassData = $result['prepass'];
+                            }
                         } else {
                             $error = 'KI-Lauf fehlgeschlagen: ' . ($result['error'] ?? 'Unbekannter Fehler');
                         }
@@ -518,6 +536,83 @@ render_header('Asset: ' . htmlspecialchars($asset['display_name'] ?? $asset['ass
             </div>
         </div>
 
+        <div class="card shadow-sm mb-3" id="prepass-card">
+            <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                <div>
+                    <div class="small text-muted">AI Prepass (Subject)</div>
+                    <div class="fw-semibold mb-0"><?= htmlspecialchars($prepassData['stage'] ?? 'SUBJECT_FIRST') ?></div>
+                </div>
+                <?php if ($canReview): ?>
+                    <button class="btn btn-sm btn-outline-primary" type="button" id="run-prepass-btn" data-asset="<?= $assetId ?>" data-revision="<?= !empty($revisions) ? (int)$revisions[0]['id'] : '' ?>">AI Prepass (Subject)</button>
+                <?php endif; ?>
+            </div>
+            <div class="card-body" id="prepass-body">
+                <?php if ($prepassData && ($prepassData['features'] ?? null)): ?>
+                    <?php
+                        $features = $prepassData['features'];
+                        $priors = $prepassData['priors'] ?? [];
+                        $confidencePrepass = $prepassData['confidence_overall'] ?? ($features['confidence']['overall'] ?? 0.0);
+                    ?>
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <div>
+                            <div class="small text-muted">Primary Subject</div>
+                            <div class="fw-semibold"><?= htmlspecialchars($features['primary_subject'] ?? 'unknown') ?></div>
+                        </div>
+                        <span class="badge bg-light text-dark border">Confidence <?= number_format((float)$confidencePrepass, 2) ?></span>
+                    </div>
+                    <div class="small mb-2 text-muted">Image-Kind: <strong><?= htmlspecialchars($features['image_kind'] ?? 'unknown') ?></strong> · Hintergrund: <strong><?= htmlspecialchars($features['background_type'] ?? 'unknown') ?></strong></div>
+                    <div class="small mb-2">Subjects:
+                        <?php if (!empty($features['subjects_present'])): ?>
+                            <?= htmlspecialchars(implode(', ', $features['subjects_present'])) ?>
+                        <?php else: ?>
+                            <span class="text-muted">–</span>
+                        <?php endif; ?>
+                    </div>
+                    <div class="small mb-2">Counts: H <?= (int)($features['counts']['humans'] ?? 0) ?> · A <?= (int)($features['counts']['animals'] ?? 0) ?> · O <?= (int)($features['counts']['objects'] ?? 0) ?></div>
+                    <div class="small mb-2">Human Attributes:
+                        <?php if (!empty($features['human_attributes']['present'])): ?>
+                            <?= htmlspecialchars($features['human_attributes']['apparent_age'] ?? 'unknown') ?>,
+                            <?= htmlspecialchars($features['human_attributes']['gender_presentation'] ?? 'unknown') ?>
+                        <?php else: ?>
+                            <span class="text-muted">none/unknown</span>
+                        <?php endif; ?>
+                    </div>
+                    <div class="small mb-2">Notes:
+                        <?php
+                            $noteBadges = [];
+                            if (!empty($features['notes']['is_single_character_fullbody'])) $noteBadges[] = 'Fullbody';
+                            if (!empty($features['notes']['contains_multiple_panels'])) $noteBadges[] = 'Panels';
+                            if (!empty($features['notes']['is_scene_establishing_shot'])) $noteBadges[] = 'Establishing Shot';
+                        ?>
+                        <?php if (!empty($noteBadges)): ?>
+                            <?php foreach ($noteBadges as $label): ?>
+                                <span class="badge bg-light text-dark border me-1"><?= htmlspecialchars($label) ?></span>
+                            <?php endforeach; ?>
+                        <?php else: ?>
+                            <span class="text-muted">–</span>
+                        <?php endif; ?>
+                    </div>
+                    <?php if (!empty($features['free_caption'])): ?>
+                        <div class="small fst-italic text-muted mb-2">“<?= htmlspecialchars($features['free_caption']) ?>”</div>
+                    <?php endif; ?>
+                    <div class="mb-2">
+                        <div class="small text-muted mb-1">Soft Priors</div>
+                        <div class="d-flex flex-wrap gap-2">
+                            <?php foreach (['character','location','scene','prop','effect'] as $pKey): ?>
+                                <span class="badge bg-light text-dark border">
+                                    <?= $pKey ?>: <?= number_format((float)($priors[$pKey] ?? 0.0), 2) ?>
+                                </span>
+                            <?php endforeach; ?>
+                        </div>
+                    </div>
+                    <div class="small text-muted">Stand: <?= htmlspecialchars($prepassData['updated_at'] ?? $prepassData['created_at'] ?? '') ?> · Modell: <?= htmlspecialchars($prepassData['model'] ?? '') ?></div>
+                <?php else: ?>
+                    <p class="text-muted small mb-2">Noch kein Prepass vorhanden. Der Lauf speichert Features und Soft-Priors für spätere Klassifizierung.</p>
+                <?php endif; ?>
+                <div class="small text-muted mt-2" id="prepass-status"></div>
+            </div>
+        </div>
+
         <div class="card shadow-sm">
             <div class="card-header bg-light">Neue Revision</div>
             <div class="card-body">
@@ -771,6 +866,37 @@ render_header('Asset: ' . htmlspecialchars($asset['display_name'] ?? $asset['ass
         viewInput.addEventListener(evt, updateHint);
         extInput.addEventListener(evt, updateHint);
     });
+
+    const prepassButton = document.getElementById('run-prepass-btn');
+    const prepassStatus = document.getElementById('prepass-status');
+    if (prepassButton && prepassStatus) {
+        prepassButton.addEventListener('click', async () => {
+            prepassButton.disabled = true;
+            prepassStatus.textContent = 'Prepass wird ausgeführt...';
+            try {
+                const payload = { asset_id: parseInt(prepassButton.dataset.asset, 10) };
+                if (prepassButton.dataset.revision) {
+                    payload.revision_id = parseInt(prepassButton.dataset.revision, 10);
+                }
+                const response = await fetch('/api/v1/ai/prepass-subject.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                const data = await response.json();
+                if (response.ok && (data.success ?? false)) {
+                    prepassStatus.textContent = 'Prepass aktualisiert. Seite wird neu geladen...';
+                    setTimeout(() => window.location.reload(), 600);
+                } else {
+                    prepassStatus.textContent = 'Fehler: ' + (data.error || 'Unbekannter Fehler');
+                }
+            } catch (err) {
+                prepassStatus.textContent = 'Fehler: ' + err;
+            } finally {
+                prepassButton.disabled = false;
+            }
+        });
+    }
 
     // Initial call
     updateHint();

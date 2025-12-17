@@ -15,7 +15,7 @@ class AiOpenAiClient
         $this->embeddingModel = $config['embedding_model'] ?? 'text-embedding-3-small';
     }
 
-    public function analyzeImageWithSchema(string $imagePath, array $schema, string $instruction, int $maxRetries = 2): array
+    public function analyzeImageWithSchema(string $imagePath, array $schema, string $instruction, int $maxRetries = 2, string $detail = 'auto', ?string $systemPrompt = null): array
     {
         $this->ensureApiKey();
         $this->assertReadableFile($imagePath);
@@ -25,13 +25,22 @@ class AiOpenAiClient
         $messages = [
             [
                 'role' => 'system',
-                'content' => 'Du bist eine präzise Vision-Pipeline. Antworte ausschließlich mit JSON, das exakt dem vorgegebenen Schema entspricht. Keine Floskeln, keine zusätzlichen Felder.',
+                'content' => $systemPrompt ?: 'Du bist eine präzise Vision-Pipeline. Antworte ausschließlich mit JSON, das exakt dem vorgegebenen Schema entspricht. Keine Floskeln, keine zusätzlichen Felder.',
             ],
             [
                 'role' => 'user',
                 'content' => [
                     ['type' => 'text', 'text' => $instruction],
-                    ['type' => 'image_url', 'image_url' => ['url' => $this->imageToDataUrl($imagePath)]],
+                    [
+                        'type' => 'image_url',
+                        'image_url' => array_filter(
+                            [
+                                'url' => $this->imageToDataUrl($imagePath),
+                                'detail' => $detail !== 'auto' ? $detail : null,
+                            ],
+                            fn($value) => $value !== null
+                        ),
+                    ],
                 ],
             ],
         ];
@@ -153,6 +162,7 @@ class AiOpenAiClient
     {
         $errors = [];
         $type = $schema['type'] ?? null;
+        $enum = $schema['enum'] ?? null;
 
         if ($type === 'object') {
             if (!is_array($data) || array_values($data) === $data) {
@@ -199,12 +209,36 @@ class AiOpenAiClient
             if (!is_string($data)) {
                 $errors[] = $path . ' muss ein String sein.';
             }
+        } elseif ($type === 'boolean') {
+            if (!is_bool($data)) {
+                $errors[] = $path . ' muss ein Boolean sein.';
+            }
         } elseif ($type === 'number' || $type === 'integer') {
             if (!is_numeric($data)) {
                 $errors[] = $path . ' muss eine Zahl sein.';
             }
+            $minimum = $schema['minimum'] ?? null;
+            $maximum = $schema['maximum'] ?? null;
+            if ($minimum !== null && $data < $minimum) {
+                $errors[] = $path . ' muss >= ' . $minimum . ' sein.';
+            }
+            if ($maximum !== null && $data > $maximum) {
+                $errors[] = $path . ' muss <= ' . $maximum . ' sein.';
+            }
+            if ($type === 'integer' && (int)$data != $data) {
+                $errors[] = $path . ' muss eine Ganzzahl sein.';
+            }
+        }
+
+        if ($enum !== null && !in_array($data, $enum, true)) {
+            $errors[] = $path . ' hat keinen gültigen Enum-Wert.';
         }
 
         return ['valid' => empty($errors), 'errors' => $errors];
+    }
+
+    public function getVisionModel(): string
+    {
+        return $this->visionModel;
     }
 }

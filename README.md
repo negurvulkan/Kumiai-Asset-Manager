@@ -136,6 +136,9 @@ Selbstgehostete LAMP-WebApp zur Verwaltung von Kreativprojekten (Manga, Comics, 
 - Bestehende Installationen auf den Stand mit Entity-First-Klassifizierung und flexiblen Achsen bringen: `mysql <datenbankname> < database/upgrade_v1_to_v2.sql` (fügt `classification_state`, `entity_file_links`, `classification_axes`, `classification_axis_values` und `revision_classifications` hinzu bzw. aktualisiert bestehende Spalten).
 - Upgrade für deterministische Asset-Keys und Asset-Klassifikationen: `mysql <datenbankname> < database/upgrade_v2_to_v3.sql` (fügt `asset_key`, `display_name`, `asset_classifications` hinzu und hinterlegt einen eindeutigen Key pro Projekt).
 - Upgrade für Inventory-Vor-Klassifizierungen: `mysql <datenbankname> < database/upgrade_v3_to_v4.sql` (legt `inventory_classifications` für vorgezogene Achsenwerte an).
+- Upgrade für KI-Audit/Review und Queue: `mysql <datenbankname> < database/upgrade_v4_to_v5.sql` (führt `ai_audit_logs`, `ai_review_queue` ein).
+- Upgrade für AI-Jobs/Embeddings: `mysql <datenbankname> < database/upgrade_v5_to_v6.sql` (führt `ai_jobs`, `ai_runs`, `asset_ai`, `entity_embeddings` ein).
+- Upgrade für SUBJECT_FIRST-Prepass: `mysql <datenbankname> < database/upgrade_v6_to_v7.sql` (legt `asset_ai_prepass` an und tracked Confidence).
 - Läuft auf Standard-PHP/MySQL-Hosting ohne Spezialdienste.
 
 ## 15) Nicht-funktionale Anforderungen
@@ -172,7 +175,8 @@ Selbstgehostete LAMP-WebApp zur Verwaltung von Kreativprojekten (Manga, Comics, 
 - **Deployment-Hinweise:** Webroot auf `public/` zeigen lassen; PHP-CLI für `scripts/scan.php` verfügbar machen (Cron). Thumbnails/Uploads sind im MVP noch nicht integriert.
 
 ## 18) KI-gestützte Klassifizierung & Audit
-- Service-Layer unter `includes/services/` (OpenAI Vision + Embeddings) mit strikter JSON-Schema-Validierung, automatischen Retries bei invalidem Output und Cosine-Similarity in PHP.
-- Pipeline: lokales Bild laden → Vision-Analyse (asset_type grob/fein, subjects, scene_hints, attributes, free_caption, analysis_confidence) → Regel-Kandidaten (horse / location / stable / teen+school+uniform) → Embeddings aus Caption + normalisierten Stichworten → TopK-Sortierung, Auto-Assign über Score-Threshold & Margin; sonst Review-Queue.
-- Audit-Logging (`ai_audit_logs`) protokolliert Input/Output/Confidence/Fehler. Ergebnisse landen in `ai_review_queue` (auto_assigned vs. needs_review) und sind nur für berechtigte Rollen (owner/admin/editor) über `public/ajax_ai_classification.php` abrufbar.
-- Konfiguration über `openai`-Block in `includes/config.php` (API-Key, Modelle, Schwellenwerte); DB-Upgrade via `database/upgrade_v4_to_v5.sql`.
+- Service-Layer unter `includes/services/` (OpenAI Vision + Embeddings) mit strikter JSON-Schema-Validierung, automatischen Retries bei invalidem Output und Cosine-Similarity in PHP. Prepass/Classification teilen sich denselben Client, der Enumerationen/Min/Max prüft.
+- SUBJECT_FIRST Vision-Prepass: JSON-Schema (primary_subject, subjects_present, counts, human_attributes, image_kind, background_type, notes, caption, confidence), Strict-Output, Speicherung in `asset_ai_prepass` inkl. revision_id, Modell und Confidence. Soft-Priors (character/location/scene/prop/effect) über `PrepassScoringService`, Audit mit Diff (`ai_audit_logs`). Endpoint `POST /api/v1/ai/prepass-subject` + CLI `php bin/ai-prepass-subject.php --asset=123 [--revision=ID]`; UI-Button & Panel im Asset-Detail.
+- Pipeline: lokales Bild laden → SUBJECT_FIRST-Prepass (optional cached) → Vision-Analyse (asset_type grob/fein, subjects, scene_hints, attributes, free_caption, analysis_confidence) mit Hinweis auf Priors → Regel-Kandidaten (horse / location / stable / teen+school+uniform + Prior-basierte Kandidaten) → Embeddings aus Caption + Stichworten + Priors → Cosine-Similarity (TopK) → Auto-Assign mit Score-Threshold & Margin; sonst Review-Queue.
+- Audit-Logging (`ai_audit_logs`) protokolliert Input/Output/Confidence/Fehler. Ergebnisse landen in `ai_review_queue` (auto_assigned vs. needs_review) und sind nur für berechtigte Rollen (owner/admin/editor) über `public/ajax_ai_classification.php` abrufbar. Prepass-Diffs werden zusätzlich im Audit abgelegt.
+- Konfiguration über `openai`-Block in `includes/config.php` (API-Key, Modelle, Schwellenwerte, Prepass-Detail/Retry); DB-Upgrade via `database/upgrade_v6_to_v7.sql` für den Prepass.
