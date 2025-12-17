@@ -25,5 +25,9 @@ return [
             'margin' => 0.08,
             'top_k' => 3,
         ],
+        'prepass' => [
+            'max_retries' => 2,
+            'detail' => 'low',
+        ],
     ],
 ];
