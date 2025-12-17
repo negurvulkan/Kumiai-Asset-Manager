@@ -9,6 +9,11 @@ function current_user(): ?array
     return $_SESSION['user'] ?? null;
 }
 
+function is_logged_in(): bool
+{
+    return current_user() !== null;
+}
+
 function require_login(): void
 {
     if (!current_user()) {
