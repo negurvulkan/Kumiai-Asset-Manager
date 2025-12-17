@@ -96,6 +96,7 @@
 - Dedizierter Service-Layer (`includes/services/ai_client.php`, `includes/services/ai_classification.php`) mit OpenAI Vision + Embeddings, strikter JSON-Schema-Validierung und automatischen Retries bei ungültigem Output.
 - Pipeline: lokales Bild laden → Vision-Analyse (asset_type grob/fein, subjects, scene_hints, attributes, free_caption, analysis_confidence) → Kandidaten-Retrieval via Regeln (horse / location / stable / teen+school+uniform) → Embeddings aus Caption + Stichworten → Cosine-Similarity (TopK) → Auto-Assign mit Score-Threshold & Margin, sonst Review-Queue-Eintrag.
 - Audit-Logging aller Aktionen (`ai_audit_logs` inkl. Input/Output/Confidence/Fehler) und Review-/Auto-Assign-Status in `ai_review_queue`; Trigger nur für berechtigte Rollen (owner/admin/editor) über `public/ajax_ai_classification.php`.
+- Persistente KI-Jobs & Runs (`ai_jobs`, `ai_runs`) mit Status, Fehlerdetails, Needs-Review-Flag und Verknüpfungen zu Assets, Entities und Nutzern; Assets und Entities erhalten Embeddings/klassifizierte Felder (`asset_ai`, `entity_embeddings`) inkl. Confidence und JSON-Vektorablage für schnelles Retrieval. AI-Audit-Einträge und Revisionen speichern optionale Diff-Informationen samt Confidence für Nachverfolgung und manuelle Prüfung.
 
 ## Erweiterungen (optional)
 - Webhooks/Callbacks nach Review-Events.
