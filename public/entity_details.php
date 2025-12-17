@@ -4,6 +4,9 @@ require_once __DIR__ . '/../includes/naming.php';
 require_once __DIR__ . '/../includes/files.php';
 require_login();
 
+$message = null;
+$error = null;
+
 $entityId = isset($_GET['entity_id']) ? (int)$_GET['entity_id'] : 0;
 
 $entityStmt = $pdo->prepare('SELECT e.*, t.name AS type_name, t.field_definitions FROM entities e JOIN entity_types t ON t.id = e.type_id WHERE e.id = :id');
@@ -38,6 +41,75 @@ $projectStmt = $pdo->prepare('SELECT * FROM projects WHERE id = :id');
 $projectStmt->execute(['id' => $projectId]);
 $projectFull = $projectStmt->fetch();
 $projectRoot = rtrim($projectFull['root_path'] ?? '', '/');
+
+$fieldDefs = !empty($entity['field_definitions']) ? json_decode($entity['field_definitions'], true) : [];
+if (!is_array($fieldDefs)) $fieldDefs = [];
+
+$metadata = json_decode($entity['metadata_json'] ?: '{}', true);
+if (!is_array($metadata)) $metadata = [];
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $action = $_POST['action'] ?? '';
+
+    if ($action === 'update_custom_fields') {
+        $inputMetadata = trim($_POST['metadata_json_raw'] ?? '');
+        if ($inputMetadata !== '') {
+            $decoded = json_decode($inputMetadata, true);
+            if ($decoded === null && json_last_error() !== JSON_ERROR_NONE) {
+                $error = 'Das Roh-JSON ist ungültig.';
+            } else {
+                $metadata = $decoded;
+            }
+        }
+
+        if (!$error) {
+            foreach ($fieldDefs as $def) {
+                $key = $def['key'] ?? '';
+                if ($key === '') continue;
+
+                $fieldName = 'field_' . $key;
+                if (!array_key_exists($fieldName, $_POST)) continue;
+
+                $raw = $_POST[$fieldName];
+                $type = $def['type'] ?? 'text';
+
+                if ($type === 'boolean') {
+                    $metadata[$key] = ($raw === '1' || $raw === 'true' || $raw === 1);
+                    continue;
+                }
+
+                if ($type === 'number') {
+                    if ($raw === '' || $raw === null) {
+                        unset($metadata[$key]);
+                        continue;
+                    }
+                    if (!is_numeric($raw)) {
+                        $error = 'Feld "' . htmlspecialchars($def['label'] ?? $key) . '" erwartet eine Zahl.';
+                        break;
+                    }
+                    $metadata[$key] = $raw + 0;
+                    continue;
+                }
+
+                $val = is_string($raw) ? trim($raw) : $raw;
+                if ($val === '' || $val === null) {
+                    unset($metadata[$key]);
+                } else {
+                    $metadata[$key] = $val;
+                }
+            }
+        }
+
+        if (!$error) {
+            $metadataJson = json_encode($metadata, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            $stmt = $pdo->prepare('UPDATE entities SET metadata_json = :metadata WHERE id = :id');
+            $stmt->execute(['metadata' => $metadataJson, 'id' => $entityId]);
+
+            $entity['metadata_json'] = $metadataJson;
+            $message = 'Custom Fields wurden aktualisiert.';
+        }
+    }
+}
 
 // Assets laden
 $assetsStmt = $pdo->prepare('SELECT * FROM assets WHERE primary_entity_id = :entity_id AND project_id = :project_id ORDER BY created_at DESC');
@@ -78,6 +150,9 @@ render_header('Entity: ' . htmlspecialchars($entity['name']));
     </div>
 </div>
 
+<?php if ($message): ?><div class="alert alert-success"><?= htmlspecialchars($message) ?></div><?php endif; ?>
+<?php if ($error): ?><div class="alert alert-danger"><?= htmlspecialchars($error) ?></div><?php endif; ?>
+
 <div class="row g-4">
     <div class="col-md-4">
         <div class="card shadow-sm mb-3">
@@ -102,10 +177,7 @@ render_header('Entity: ' . htmlspecialchars($entity['name']));
                 <p class="card-text"><?= nl2br(htmlspecialchars($entity['description'] ?? '')) ?></p>
 
                 <?php
-                    $metadata = json_decode($entity['metadata_json'] ?: '{}', true);
-                    if (!is_array($metadata)) $metadata = [];
-                    $defs = !empty($entity['field_definitions']) ? json_decode($entity['field_definitions'], true) : [];
-                    if (!is_array($defs)) $defs = [];
+                    $defs = $fieldDefs;
                     $shownKeys = [];
                 ?>
 
@@ -154,6 +226,56 @@ render_header('Entity: ' . htmlspecialchars($entity['name']));
                         <?php endforeach; ?>
                     </dl>
                 <?php endif; ?>
+
+                <form method="post" class="mt-4">
+                    <input type="hidden" name="action" value="update_custom_fields">
+                    <h6 class="h6">Custom Fields bearbeiten</h6>
+                    <?php if (empty($defs)): ?>
+                        <p class="text-muted small">Keine Custom Fields für diesen Entity-Typ definiert.</p>
+                    <?php else: ?>
+                        <div class="row g-3">
+                            <?php foreach ($defs as $def): ?>
+                                <?php $key = $def['key'] ?? ''; if ($key === '') continue; $val = $metadata[$key] ?? ''; ?>
+                                <div class="col-sm-6">
+                                    <label class="form-label small fw-bold" for="field_<?= htmlspecialchars($key) ?>"><?= htmlspecialchars($def['label'] ?? $key) ?></label>
+                                    <?php if (($def['type'] ?? 'text') === 'select'): ?>
+                                        <?php $options = array_filter(array_map('trim', explode(',', $def['options'] ?? ''))); ?>
+                                        <select class="form-select form-select-sm" id="field_<?= htmlspecialchars($key) ?>" name="field_<?= htmlspecialchars($key) ?>">
+                                            <option value="">-</option>
+                                            <?php foreach ($options as $opt): ?>
+                                                <option value="<?= htmlspecialchars($opt) ?>" <?= (string)$opt === (string)$val ? 'selected' : '' ?>><?= htmlspecialchars($opt) ?></option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                    <?php elseif (($def['type'] ?? 'text') === 'boolean'): ?>
+                                        <select class="form-select form-select-sm" id="field_<?= htmlspecialchars($key) ?>" name="field_<?= htmlspecialchars($key) ?>">
+                                            <option value="1" <?= ($val === true || $val === 'true' || $val === 1) ? 'selected' : '' ?>>Ja</option>
+                                            <option value="0" <?= ($val === false || $val === 'false' || $val === 0 || $val === '') ? 'selected' : '' ?>>Nein</option>
+                                        </select>
+                                    <?php else: ?>
+                                        <input
+                                            type="<?= ($def['type'] ?? 'text') === 'number' ? 'number' : 'text' ?>"
+                                            step="any"
+                                            class="form-control form-control-sm"
+                                            id="field_<?= htmlspecialchars($key) ?>"
+                                            name="field_<?= htmlspecialchars($key) ?>"
+                                            value="<?= htmlspecialchars(is_scalar($val) ? (string)$val : '') ?>"
+                                        >
+                                    <?php endif; ?>
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
+                    <?php endif; ?>
+
+                    <div class="mt-3">
+                        <label class="form-label small fw-semibold" for="metadata_json_raw">Roh-JSON (optional)</label>
+                        <textarea class="form-control font-monospace" id="metadata_json_raw" name="metadata_json_raw" rows="4"><?= htmlspecialchars(json_encode($metadata, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)) ?></textarea>
+                        <div class="form-text">Leer lassen, um bestehendes JSON beizubehalten. Werte aus den Feld-Eingaben werden beim Speichern bevorzugt.</div>
+                    </div>
+
+                    <div class="text-end mt-3">
+                        <button type="submit" class="btn btn-primary btn-sm">Speichern</button>
+                    </div>
+                </form>
             </div>
         </div>
 
