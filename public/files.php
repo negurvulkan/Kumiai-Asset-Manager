@@ -69,13 +69,51 @@ function link_inventory_batch(PDO $pdo, array $projectRow, int $projectId, array
         ];
     }
 
+    $inventoryClassifications = fetch_inventory_classifications($pdo, array_map(fn($file) => (int)$file['id'], $files));
+    $axesForAsset = [];
+    $classificationMap = [];
+    if (!empty($asset['primary_entity_type'])) {
+        $axesForAsset = load_axes_for_entity($pdo, $asset['primary_entity_type']);
+        $assetClassifications = fetch_asset_classifications($pdo, $assetId);
+        $classificationMap = $assetClassifications;
+
+        foreach ($axesForAsset as $axis) {
+            $key = $axis['axis_key'];
+            if (!empty($assetClassifications[$key])) {
+                continue;
+            }
+
+            $valuesForAxis = [];
+            foreach ($files as $file) {
+                $value = $inventoryClassifications[(int)$file['id']][$key] ?? '';
+                if ($value !== '') {
+                    $valuesForAxis[$value] = true;
+                }
+            }
+
+            if (count($valuesForAxis) === 1) {
+                $classificationMap[$key] = array_keys($valuesForAxis)[0];
+            }
+        }
+
+        if (empty($assetClassifications) && !empty($classificationMap)) {
+            replace_asset_classifications($pdo, $assetId, $axesForAsset, $classificationMap);
+        }
+    }
+
+    $revisionClassStmt = !empty($axesForAsset) ? $pdo->prepare('INSERT INTO revision_classifications (revision_id, axis_id, value_key) VALUES (:revision_id, :axis_id, :value_key)') : null;
+
     foreach ($files as $file) {
         $targetPath = sanitize_relative_path($file['file_path']);
         $meta = collect_file_metadata($projectRoot . $file['file_path']);
+        $classificationForPath = $classificationMap;
+        if ($viewLabel !== '' && !isset($classificationForPath['view'])) {
+            $classificationForPath['view'] = $viewLabel;
+        }
 
         if ($applyTemplate) {
             $extension = $manualExtension !== '' ? ltrim($manualExtension, '.') : extension_from_path($file['file_path']);
-            $generated = generate_revision_path($projectRow, $asset, $entityContext, $nextVersion, $extension, $viewLabel, [], ['view' => $viewLabel]);
+            $generated = generate_revision_path($projectRow, $asset, $entityContext, $nextVersion, $extension, $viewLabel, [], $classificationForPath);
             $targetPath = sanitize_relative_path($generated['relative_path']);
             $source = $projectRoot . $file['file_path'];
             $destination = $projectRoot . $targetPath;
@@ -117,8 +155,28 @@ function link_inventory_batch(PDO $pdo, array $projectRow, int $projectId, array
         ]);
         $revisionId = (int)$pdo->lastInsertId();
 
-        $updateInventory = $pdo->prepare('UPDATE file_inventory SET status = "linked", classification_state = "fully_classified", asset_revision_id = :revision_id, file_path = :file_path, file_hash = :file_hash, mime_type = :mime_type, file_size_bytes = :file_size_bytes, last_seen_at = NOW() WHERE id = :id');
+        if ($revisionClassStmt && !empty($classificationMap)) {
+            foreach ($axesForAsset as $axis) {
+                $valueKey = $classificationMap[$axis['axis_key']] ?? '';
+                if ($valueKey === '') {
+                    continue;
+                }
+                $revisionClassStmt->execute([
+                    'revision_id' => $revisionId,
+                    'axis_id' => $axis['id'],
+                    'value_key' => $valueKey,
+                ]);
+            }
+        }
+
+        if (!empty($axesForAsset)) {
+            replace_inventory_classifications($pdo, (int)$file['id'], $axesForAsset, $classificationMap);
+        }
+
+        $state = !empty($axesForAsset) ? derive_classification_state($axesForAsset, $classificationMap) : 'fully_classified';
+        $updateInventory = $pdo->prepare('UPDATE file_inventory SET status = "linked", classification_state = :classification_state, asset_revision_id = :revision_id, file_path = :file_path, file_hash = :file_hash, mime_type = :mime_type, file_size_bytes = :file_size_bytes, last_seen_at = NOW() WHERE id = :id');
         $updateInventory->execute([
+            'classification_state' => $state,
             'revision_id' => $revisionId,
             'file_path' => $targetPath,
             'file_hash' => $meta['file_hash'] ?? $file['file_hash'],
@@ -199,18 +257,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!$entity) {
             $error = 'Entity nicht gefunden.';
         } else {
-            $placeholders = implode(',', array_fill(0, count($selectedIds), '?'));
+            $axesForEntity = load_axes_for_entity($pdo, $entity['type_name'] ?? '');
+            $rawInputs = [];
+            foreach ($axesForEntity as $axis) {
+                $inputKey = 'axis_' . $axis['id'];
+                if (!array_key_exists($inputKey, $_POST)) {
+                    continue;
+                }
+                $rawValue = trim($_POST[$inputKey] ?? '');
+                if ($rawValue === '') {
+                    continue;
+                }
+                $rawInputs[$axis['axis_key']] = $rawValue;
+            }
+
+            $classInputs = normalize_axis_values($axesForEntity, $rawInputs);
+            $existingClassifications = fetch_inventory_classifications($pdo, $selectedIds);
+
             $insertLink = $pdo->prepare('INSERT IGNORE INTO entity_file_links (entity_id, file_inventory_id, notes, created_at) VALUES (:entity_id, :file_inventory_id, :notes, NOW())');
-            $updateInventory = $pdo->prepare("UPDATE file_inventory SET classification_state = 'entity_only' WHERE id IN ($placeholders) AND project_id = ?");
+            $updateInventory = $pdo->prepare('UPDATE file_inventory SET classification_state = :state, last_seen_at = NOW() WHERE id = :id AND project_id = :project_id');
+
             foreach ($selectedIds as $id) {
                 $insertLink->execute([
                     'entity_id' => $entityId,
                     'file_inventory_id' => $id,
                     'notes' => $note,
                 ]);
+
+                $finalValues = $existingClassifications[$id] ?? [];
+                foreach ($axesForEntity as $axis) {
+                    $key = $axis['axis_key'];
+                    if (isset($classInputs[$key])) {
+                        $finalValues[$key] = $classInputs[$key];
+                    }
+                }
+
+                replace_inventory_classifications($pdo, $id, $axesForEntity, $finalValues);
+                $state = derive_classification_state($axesForEntity, $finalValues);
+
+                $updateInventory->execute([
+                    'state' => $state,
+                    'id' => $id,
+                    'project_id' => $projectId,
+                ]);
             }
-            $updateInventory->execute(array_merge($selectedIds, [$projectId]));
-            $message = sprintf('%d Datei(en) zur Entity "%s" zugeordnet.', count($selectedIds), $entity['name']);
+
+            $message = sprintf('%d Datei(en) zur Entity "%s" zugeordnet und vor-klassifiziert.', count($selectedIds), $entity['name']);
         }
     }
 
@@ -309,13 +401,38 @@ $typesStmt = $pdo->prepare('SELECT * FROM entity_types WHERE project_id = :proje
 $typesStmt->execute(['project_id' => $projectId]);
 $entityTypes = $typesStmt->fetchAll();
 
-$entitiesStmt = $pdo->prepare('SELECT e.id, e.name, t.name AS type_name FROM entities e JOIN entity_types t ON e.type_id = t.id WHERE e.project_id = :project_id ORDER BY e.name');
+$entitiesStmt = $pdo->prepare('SELECT e.id, e.name, e.type_id, t.name AS type_name FROM entities e JOIN entity_types t ON e.type_id = t.id WHERE e.project_id = :project_id ORDER BY e.name');
 $entitiesStmt->execute(['project_id' => $projectId]);
 $entities = $entitiesStmt->fetchAll();
+
+$axesByTypeId = [];
+foreach ($entityTypes as $type) {
+    $axesByTypeId[(int)$type['id']] = load_axes_for_entity($pdo, $type['name']);
+}
+
+$entityTypeMap = [];
+foreach ($entities as $entity) {
+    $entityTypeMap[(int)$entity['id']] = (int)$entity['type_id'];
+}
+
+$postedAxisValues = [];
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    foreach ($axesByTypeId as $axes) {
+        foreach ($axes as $axis) {
+            $inputKey = 'axis_' . $axis['id'];
+            if (isset($_POST[$inputKey])) {
+                $postedAxisValues[$inputKey] = trim($_POST[$inputKey]);
+            }
+        }
+    }
+}
 
 $inventoryStmt = $pdo->prepare('SELECT * FROM file_inventory WHERE project_id = :project_id AND status = "untracked" ORDER BY last_seen_at DESC LIMIT 250');
 $inventoryStmt->execute(['project_id' => $projectId]);
 $inventory = $inventoryStmt->fetchAll();
+
+$inventoryIds = array_map(fn($row) => (int)$row['id'], $inventory);
+$inventoryClassifications = fetch_inventory_classifications($pdo, $inventoryIds);
 
 $inventoryThumbs = [];
 foreach ($inventory as $file) {
@@ -435,6 +552,8 @@ render_header('Files');
                                     <div class="fw-semibold small mb-1">#<?= (int)$file['id'] ?> · <code><?= htmlspecialchars($file['file_path']) ?></code></div>
                                     <div class="small text-muted">Hash <?= htmlspecialchars(substr($file['file_hash'], 0, 12)) ?>… · <?= htmlspecialchars($file['mime_type'] ?? 'n/a') ?></div>
                                     <div class="small text-muted">Last seen: <?= htmlspecialchars($file['last_seen_at']) ?></div>
+                                    <?php $savedValues = $inventoryClassifications[(int)$file['id']] ?? []; ?>
+                                    <div class="small text-muted">State: <?= htmlspecialchars($file['classification_state']) ?><?php if (!empty($savedValues)): ?> · <?= htmlspecialchars(implode(', ', array_map(fn($k, $v) => $k . ': ' . $v, array_keys($savedValues), $savedValues))) ?><?php endif; ?></div>
                                 </div>
                             </li>
                         <?php endforeach; ?>
@@ -450,6 +569,13 @@ render_header('Files');
                             <option value="<?= (int)$entity['id'] ?>"><?= htmlspecialchars($entity['name']) ?> (<?= htmlspecialchars($entity['type_name']) ?>)</option>
                         <?php endforeach; ?>
                     </select>
+                </div>
+                <div class="mb-2">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <label class="form-label mb-0">Vor-Klassifizierung (optional)</label>
+                        <small class="text-muted">wirkt auf alle ausgewählten Dateien</small>
+                    </div>
+                    <div id="bulk-axis-fields" class="border rounded p-2 bg-light"></div>
                 </div>
                 <div class="mb-3">
                     <label class="form-label" for="bulk_entity_note">Notiz</label>
@@ -504,6 +630,10 @@ render_header('Files');
                     <dl class="row mb-0">
                         <dt class="col-sm-4">Pfad</dt>
                         <dd class="col-sm-8"><code><?= htmlspecialchars($selectedFile['file_path']) ?></code></dd>
+                        <dt class="col-sm-4">State</dt>
+                        <dd class="col-sm-8">
+                            <span class="badge bg-light text-dark border text-uppercase"><?= htmlspecialchars($selectedFile['classification_state']) ?></span>
+                        </dd>
                         <dt class="col-sm-4">Hash</dt>
                         <dd class="col-sm-8"><span class="small text-monospace"><?= htmlspecialchars($selectedFile['file_hash']) ?></span></dd>
                         <dt class="col-sm-4">Größe</dt>
@@ -518,6 +648,13 @@ render_header('Files');
                                 –
                             <?php endif; ?>
                         </dd>
+                        <?php $selectedClassificationValues = $inventoryClassifications[(int)$selectedFile['id']] ?? []; ?>
+                        <?php if (!empty($selectedClassificationValues)): ?>
+                            <dt class="col-sm-4">Vor-Klassifizierung</dt>
+                            <dd class="col-sm-8">
+                                <div class="small text-muted mb-0"><?php foreach ($selectedClassificationValues as $axisKey => $valueKey): ?><span class="me-2"><strong><?= htmlspecialchars($axisKey) ?>:</strong> <?= htmlspecialchars($valueKey) ?></span><?php endforeach; ?></div>
+                            </dd>
+                        <?php endif; ?>
                     </dl>
                 <?php endif; ?>
             </div>
@@ -613,6 +750,82 @@ render_header('Files');
     </div>
 </div>
 <script>
+const axesByType = <?= json_encode($axesByTypeId, JSON_UNESCAPED_UNICODE) ?>;
+const entityTypeMap = <?= json_encode($entityTypeMap, JSON_UNESCAPED_UNICODE) ?>;
+const postedAxisValues = <?= json_encode($postedAxisValues, JSON_UNESCAPED_UNICODE) ?>;
+
+function renderAxisFieldsForEntity(entityId) {
+    const container = document.getElementById('bulk-axis-fields');
+    if (!container) return;
+
+    container.innerHTML = '';
+    const typeId = entityTypeMap[entityId] || entityTypeMap[String(entityId)] || null;
+    if (!typeId) {
+        container.innerHTML = '<p class="text-muted small mb-0">Entity wählen, um die Achsen zu sehen.</p>';
+        return;
+    }
+
+    const axes = axesByType[typeId] || [];
+    if (!axes.length) {
+        container.innerHTML = '<p class="text-muted small mb-0">Keine Achsen für diesen Entity-Typ definiert.</p>';
+        return;
+    }
+
+    axes.forEach((axis) => {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'mb-2';
+
+        const label = document.createElement('label');
+        label.className = 'form-label fw-semibold mb-1 small';
+        label.textContent = axis.label;
+        wrapper.appendChild(label);
+
+        const fieldName = `axis_${axis.id}`;
+
+        if (axis.values && axis.values.length > 0) {
+            const select = document.createElement('select');
+            select.className = 'form-select form-select-sm axis-field';
+            select.name = fieldName;
+
+            const empty = document.createElement('option');
+            empty.value = '';
+            empty.textContent = '–';
+            select.appendChild(empty);
+
+            axis.values.forEach((value) => {
+                const option = document.createElement('option');
+                option.value = value.value_key;
+                option.textContent = value.label;
+                if (postedAxisValues[fieldName] !== undefined && postedAxisValues[fieldName] === value.value_key) {
+                    option.selected = true;
+                }
+                select.appendChild(option);
+            });
+
+            wrapper.appendChild(select);
+        } else {
+            const input = document.createElement('input');
+            input.className = 'form-control form-control-sm axis-field';
+            input.name = fieldName;
+            input.placeholder = 'Wert';
+            if (postedAxisValues[fieldName] !== undefined) {
+                input.value = postedAxisValues[fieldName];
+            }
+            wrapper.appendChild(input);
+        }
+
+        container.appendChild(wrapper);
+    });
+}
+
+const bulkEntitySelect = document.getElementById('bulk_entity');
+if (bulkEntitySelect) {
+    renderAxisFieldsForEntity(bulkEntitySelect.value);
+    bulkEntitySelect.addEventListener('change', (event) => {
+        renderAxisFieldsForEntity(event.target.value);
+    });
+}
+
 function gatherSelectedIds() {
     const ids = [];
     document.querySelectorAll('.file-checkbox:checked').forEach((checkbox) => {

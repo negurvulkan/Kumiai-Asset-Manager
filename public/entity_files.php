@@ -69,10 +69,71 @@ $axes = load_axes_for_entity($pdo, $entity['type_name'] ?? '');
 $classInputs = [];
 
 $selectedLinks = parse_selected_link_ids();
+$selectedFiles = [];
+
+$filterRaw = [];
+$filterSelections = [];
+foreach ($axes as $axis) {
+    $paramKey = 'filter_axis_' . $axis['id'];
+    $filterSelections[$paramKey] = isset($_GET[$paramKey]) ? (string)$_GET[$paramKey] : '';
+    if (isset($_GET[$paramKey])) {
+        $filterRaw[$axis['axis_key']] = trim((string)$_GET[$paramKey]);
+    }
+}
+$filterValues = normalize_axis_values($axes, $filterRaw);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
-    if ($action === 'classify' && !empty($selectedLinks)) {
+    if (in_array($action, ['classify', 'save_axes'], true) && !empty($selectedLinks)) {
+        $placeholders = implode(',', array_fill(0, count($selectedLinks), '?'));
+        $fileStmt = $pdo->prepare("SELECT fi.*, l.id AS link_id FROM entity_file_links l JOIN file_inventory fi ON fi.id = l.file_inventory_id WHERE l.entity_id = ? AND fi.project_id = ? AND l.id IN ($placeholders)");
+        $params = array_merge([$entityId, $projectId], $selectedLinks);
+        $fileStmt->execute($params);
+        $selectedFiles = $fileStmt->fetchAll();
+        if (empty($selectedFiles)) {
+            $error = 'Keine passenden Entity-Dateien gefunden.';
+        }
+    }
+
+    if ($action === 'save_axes' && !$error && !empty($selectedFiles)) {
+        $rawInputs = [];
+        foreach ($axes as $axis) {
+            $inputKey = 'axis_' . $axis['id'];
+            if (!array_key_exists($inputKey, $_POST)) {
+                continue;
+            }
+            $rawValue = trim($_POST[$inputKey] ?? '');
+            if ($rawValue === '') {
+                continue;
+            }
+            $rawInputs[$axis['axis_key']] = $rawValue;
+        }
+
+        $classInputs = normalize_axis_values($axes, $rawInputs);
+        $existing = fetch_inventory_classifications($pdo, array_map(fn($row) => (int)$row['id'], $selectedFiles));
+        $updateInventory = $pdo->prepare('UPDATE file_inventory SET classification_state = :state, last_seen_at = NOW() WHERE id = :id');
+
+        foreach ($selectedFiles as $file) {
+            $finalValues = $existing[(int)$file['id']] ?? [];
+            foreach ($axes as $axis) {
+                $key = $axis['axis_key'];
+                if (isset($classInputs[$key])) {
+                    $finalValues[$key] = $classInputs[$key];
+                }
+            }
+
+            replace_inventory_classifications($pdo, (int)$file['id'], $axes, $finalValues);
+            $state = derive_classification_state($axes, $finalValues);
+            $updateInventory->execute([
+                'state' => $state,
+                'id' => $file['id'],
+            ]);
+        }
+
+        $message = sprintf('Vor-Klassifizierung für %d Datei(en) gespeichert.', count($selectedFiles));
+    }
+
+    if ($action === 'classify' && !$error && !empty($selectedLinks) && !empty($selectedFiles)) {
         $newAssetType = trim($_POST['new_asset_type'] ?? 'concept');
         $newAssetDescription = trim($_POST['new_asset_description'] ?? '');
         $displayName = trim($_POST['new_asset_display_name'] ?? '');
@@ -81,157 +142,209 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         foreach ($axes as $axis) {
             $inputKey = 'axis_' . $axis['id'];
-            $rawInputs[$axis['axis_key']] = trim($_POST[$inputKey] ?? '');
+            if (!array_key_exists($inputKey, $_POST)) {
+                continue;
+            }
+            $rawValue = trim($_POST[$inputKey] ?? '');
+            if ($rawValue === '') {
+                continue;
+            }
+            $rawInputs[$axis['axis_key']] = $rawValue;
         }
 
         $classInputs = normalize_axis_values($axes, $rawInputs);
-        $classificationMap = $classInputs;
-        $assetKey = build_asset_key($entity, $axes, $classInputs);
-        $assetRow = null;
+        $existingInventoryClasses = fetch_inventory_classifications($pdo, array_map(fn($row) => (int)$row['id'], $selectedFiles));
+        $classificationMap = [];
+        $conflicts = [];
 
-        $assetLookup = $pdo->prepare('SELECT a.*, e.name AS primary_entity_name, e.slug AS primary_entity_slug, et.name AS primary_entity_type FROM assets a LEFT JOIN entities e ON a.primary_entity_id = e.id LEFT JOIN entity_types et ON e.type_id = et.id WHERE a.project_id = :project_id AND a.asset_key = :asset_key LIMIT 1');
-        $assetLookup->execute(['project_id' => $projectId, 'asset_key' => $assetKey]);
-        $existingAsset = $assetLookup->fetch();
-        if ($existingAsset) {
-            $assetRow = $existingAsset;
-            $fetched = fetch_asset_classifications($pdo, (int)$existingAsset['id']);
-            $classificationMap = !empty($fetched) ? $fetched : $classInputs;
-            $assetId = (int)$existingAsset['id'];
-        }
-
-        if (!$assetRow) {
-            $assetInsert = $pdo->prepare('INSERT INTO assets (project_id, name, asset_key, display_name, asset_type, primary_entity_id, description, status, created_by, created_at) VALUES (:project_id, :name, :asset_key, :display_name, :asset_type, :primary_entity_id, :description, "active", :created_by, NOW())');
-            $assetInsert->execute([
-                'project_id' => $projectId,
-                'name' => $assetKey,
-                'asset_key' => $assetKey,
-                'display_name' => $displayName !== '' ? $displayName : null,
-                'asset_type' => $newAssetType ?: 'concept',
-                'primary_entity_id' => $entityId,
-                'description' => $newAssetDescription,
-                'created_by' => current_user()['id'],
-            ]);
-            $assetId = (int)$pdo->lastInsertId();
-
-            if (str_contains($assetKey, 'pending')) {
-                $assetKey = build_asset_key($entity, $axes, $classInputs, $assetId);
-                $pdo->prepare('UPDATE assets SET asset_key = :asset_key, name = :asset_key WHERE id = :id')->execute([
-                    'asset_key' => $assetKey,
-                    'id' => $assetId,
-                ]);
+        foreach ($axes as $axis) {
+            $key = $axis['axis_key'];
+            $override = $classInputs[$key] ?? '';
+            if ($override !== '') {
+                $classificationMap[$key] = $override;
+                continue;
             }
 
-            replace_asset_classifications($pdo, $assetId, $axes, $classInputs);
-            $classificationMap = $classInputs;
-            $assetRow = [
-                'id' => $assetId,
-                'asset_key' => $assetKey,
-                'asset_type' => $newAssetType ?: 'concept',
-                'primary_entity_id' => $entityId,
-                'primary_entity_name' => $entity['name'],
-                'primary_entity_slug' => $entity['slug'],
-                'primary_entity_type' => $entity['type_name'],
-                'display_name' => $displayName,
-            ];
-            $message = 'Asset erstellt.';
+            $valuesForAxis = [];
+            foreach ($selectedFiles as $file) {
+                $value = $existingInventoryClasses[(int)$file['id']][$key] ?? '';
+                if ($value !== '') {
+                    $valuesForAxis[$value] = true;
+                }
+            }
+
+            if (count($valuesForAxis) > 1) {
+                $conflicts[$key] = array_keys($valuesForAxis);
+                continue;
+            }
+
+            if (count($valuesForAxis) === 1) {
+                $classificationMap[$key] = array_keys($valuesForAxis)[0];
+            }
         }
 
-        if (!$error && $assetRow) {
-            $placeholders = implode(',', array_fill(0, count($selectedLinks), '?'));
-            $fileStmt = $pdo->prepare("SELECT fi.*, l.id AS link_id FROM entity_file_links l JOIN file_inventory fi ON fi.id = l.file_inventory_id WHERE l.entity_id = ? AND fi.project_id = ? AND l.id IN ($placeholders)");
-            $params = array_merge([$entityId, $projectId], $selectedLinks);
-            $fileStmt->execute($params);
-            $files = $fileStmt->fetchAll();
+        if (!empty($conflicts)) {
+            $error = 'Konflikt in gespeicherten Achsenwerten: ' . implode(', ', array_map(fn($key, $values) => $key . ' (' . implode(' / ', $values) . ')', array_keys($conflicts), $conflicts)) . '. Bitte einen eindeutigen Wert wählen.';
+        }
 
-            if (empty($files)) {
-                $error = 'Keine passenden Entity-Dateien gefunden.';
-            } else {
-                $versionStmt = $pdo->prepare('SELECT COALESCE(MAX(version), 0) AS max_version FROM asset_revisions WHERE asset_id = :asset_id');
-                $versionStmt->execute(['asset_id' => $assetId]);
-                $nextVersion = ((int)$versionStmt->fetchColumn()) + 1;
-                $revisionClassStmt = $pdo->prepare('INSERT INTO revision_classifications (revision_id, axis_id, value_key) VALUES (:revision_id, :axis_id, :value_key)');
-                $viewLabel = $classificationMap['view'] ?? 'main';
+        if (!$error) {
+            $assetKey = build_asset_key($entity, $axes, $classificationMap);
+            $assetRow = null;
 
-                foreach ($files as $file) {
-                    $targetPath = sanitize_relative_path($file['file_path']);
-                    $meta = collect_file_metadata($projectRoot . $file['file_path']);
-                    $extension = extension_from_path($file['file_path']);
-                    $generated = generate_revision_path($projectFull, $assetRow, ['id' => $entityId, 'name' => $entity['name'], 'slug' => $entity['slug'], 'type' => $entity['type_name']], $nextVersion, $extension, $viewLabel, [], $classificationMap);
-                    $targetPath = sanitize_relative_path($generated['relative_path']);
+            $assetLookup = $pdo->prepare('SELECT a.*, e.name AS primary_entity_name, e.slug AS primary_entity_slug, et.name AS primary_entity_type FROM assets a LEFT JOIN entities e ON a.primary_entity_id = e.id LEFT JOIN entity_types et ON e.type_id = et.id WHERE a.project_id = :project_id AND a.asset_key = :asset_key LIMIT 1');
+            $assetLookup->execute(['project_id' => $projectId, 'asset_key' => $assetKey]);
+            $existingAsset = $assetLookup->fetch();
+            if ($existingAsset) {
+                $assetRow = $existingAsset;
+                $fetched = fetch_asset_classifications($pdo, (int)$existingAsset['id']);
+                $classificationMap = !empty($fetched) ? $fetched : $classificationMap;
+                $assetId = (int)$existingAsset['id'];
+            }
 
-                    $source = $projectRoot . $file['file_path'];
-                    $destination = $projectRoot . $targetPath;
-                    $finalTarget = $targetPath;
+            if (!$assetRow) {
+                $assetInsert = $pdo->prepare('INSERT INTO assets (project_id, name, asset_key, display_name, asset_type, primary_entity_id, description, status, created_by, created_at) VALUES (:project_id, :name, :asset_key, :display_name, :asset_type, :primary_entity_id, :description, "active", :created_by, NOW())');
+                $assetInsert->execute([
+                    'project_id' => $projectId,
+                    'name' => $assetKey,
+                    'asset_key' => $assetKey,
+                    'display_name' => $displayName !== '' ? $displayName : null,
+                    'asset_type' => $newAssetType ?: 'concept',
+                    'primary_entity_id' => $entityId,
+                    'description' => $newAssetDescription,
+                    'created_by' => current_user()['id'],
+                ]);
+                $assetId = (int)$pdo->lastInsertId();
 
-                    if ($projectRoot !== '' && file_exists($source)) {
-                        ensure_directory(dirname($destination));
-                        $finalTarget = ensure_unique_path($projectRoot, $targetPath);
-                        $destination = $projectRoot . $finalTarget;
-                        ensure_directory(dirname($destination));
-                        if (!@rename($source, $destination)) {
-                            $error = sprintf('Datei %s konnte nicht verschoben werden.', $file['file_path']);
-                        } else {
-                            $meta = collect_file_metadata($destination);
-                            generate_thumbnail($projectId, $finalTarget, $destination);
-                        }
-                    }
-
-                    if ($error) {
-                        break;
-                    }
-
-                    $revStmt = $pdo->prepare('INSERT INTO asset_revisions (asset_id, version, file_path, file_hash, mime_type, file_size_bytes, width, height, created_by, created_at, review_status) VALUES (:asset_id, :version, :file_path, :file_hash, :mime_type, :file_size_bytes, :width, :height, :created_by, NOW(), "pending")');
-                    $revStmt->execute([
-                        'asset_id' => $assetId,
-                        'version' => $nextVersion,
-                        'file_path' => $finalTarget,
-                        'file_hash' => $meta['file_hash'] ?? $file['file_hash'],
-                        'mime_type' => $meta['mime_type'] ?? ($file['mime_type'] ?? 'application/octet-stream'),
-                        'file_size_bytes' => $meta['file_size_bytes'] ?? ($file['file_size_bytes'] ?? 0),
-                        'width' => $meta['width'],
-                        'height' => $meta['height'],
-                        'created_by' => current_user()['id'],
+                if (str_contains($assetKey, 'pending')) {
+                    $assetKey = build_asset_key($entity, $axes, $classificationMap, $assetId);
+                    $pdo->prepare('UPDATE assets SET asset_key = :asset_key, name = :asset_key WHERE id = :id')->execute([
+                        'asset_key' => $assetKey,
+                        'id' => $assetId,
                     ]);
-                    $revisionId = (int)$pdo->lastInsertId();
+                }
 
-                    foreach ($axes as $axis) {
-                        $valueKey = $classificationMap[$axis['axis_key']] ?? '';
-                        if ($valueKey === '') {
-                            continue;
-                        }
-                        $revisionClassStmt->execute([
-                            'revision_id' => $revisionId,
-                            'axis_id' => $axis['id'],
-                            'value_key' => $valueKey,
-                        ]);
+                replace_asset_classifications($pdo, $assetId, $axes, $classificationMap);
+                $assetRow = [
+                    'id' => $assetId,
+                    'asset_key' => $assetKey,
+                    'asset_type' => $newAssetType ?: 'concept',
+                    'primary_entity_id' => $entityId,
+                    'primary_entity_name' => $entity['name'],
+                    'primary_entity_slug' => $entity['slug'],
+                    'primary_entity_type' => $entity['type_name'],
+                    'display_name' => $displayName,
+                ];
+                $message = 'Asset erstellt.';
+            }
+        }
+
+        if (!$error && !empty($assetRow)) {
+            $versionStmt = $pdo->prepare('SELECT COALESCE(MAX(version), 0) AS max_version FROM asset_revisions WHERE asset_id = :asset_id');
+            $versionStmt->execute(['asset_id' => $assetId]);
+            $nextVersion = ((int)$versionStmt->fetchColumn()) + 1;
+            $revisionClassStmt = $pdo->prepare('INSERT INTO revision_classifications (revision_id, axis_id, value_key) VALUES (:revision_id, :axis_id, :value_key)');
+            $viewLabel = $classificationMap['view'] ?? 'main';
+            $updateInventory = $pdo->prepare('UPDATE file_inventory SET status = "linked", classification_state = :state, asset_revision_id = :revision_id, file_path = :file_path, file_hash = :file_hash, mime_type = :mime_type, file_size_bytes = :file_size_bytes, last_seen_at = NOW() WHERE id = :id');
+
+            foreach ($selectedFiles as $file) {
+                $targetPath = sanitize_relative_path($file['file_path']);
+                $meta = collect_file_metadata($projectRoot . $file['file_path']);
+                $extension = extension_from_path($file['file_path']);
+                $generated = generate_revision_path($projectFull, $assetRow, ['id' => $entityId, 'name' => $entity['name'], 'slug' => $entity['slug'], 'type' => $entity['type_name']], $nextVersion, $extension, $viewLabel, [], $classificationMap);
+                $targetPath = sanitize_relative_path($generated['relative_path']);
+
+                $source = $projectRoot . $file['file_path'];
+                $destination = $projectRoot . $targetPath;
+                $finalTarget = $targetPath;
+
+                if ($projectRoot !== '' && file_exists($source)) {
+                    ensure_directory(dirname($destination));
+                    $finalTarget = ensure_unique_path($projectRoot, $targetPath);
+                    $destination = $projectRoot . $finalTarget;
+                    ensure_directory(dirname($destination));
+                    if (!@rename($source, $destination)) {
+                        $error = sprintf('Datei %s konnte nicht verschoben werden.', $file['file_path']);
+                    } else {
+                        $meta = collect_file_metadata($destination);
+                        generate_thumbnail($projectId, $finalTarget, $destination);
                     }
+                }
 
-                    $state = derive_classification_state($axes, $classificationMap);
-                    $updateInventory = $pdo->prepare('UPDATE file_inventory SET status = "linked", classification_state = :state, asset_revision_id = :revision_id, file_path = :file_path, file_hash = :file_hash, mime_type = :mime_type, file_size_bytes = :file_size_bytes, last_seen_at = NOW() WHERE id = :id');
-                    $updateInventory->execute([
-                        'state' => $state,
+                if ($error) {
+                    break;
+                }
+
+                $revStmt = $pdo->prepare('INSERT INTO asset_revisions (asset_id, version, file_path, file_hash, mime_type, file_size_bytes, width, height, created_by, created_at, review_status) VALUES (:asset_id, :version, :file_path, :file_hash, :mime_type, :file_size_bytes, :width, :height, :created_by, NOW(), "pending")');
+                $revStmt->execute([
+                    'asset_id' => $assetId,
+                    'version' => $nextVersion,
+                    'file_path' => $finalTarget,
+                    'file_hash' => $meta['file_hash'] ?? $file['file_hash'],
+                    'mime_type' => $meta['mime_type'] ?? ($file['mime_type'] ?? 'application/octet-stream'),
+                    'file_size_bytes' => $meta['file_size_bytes'] ?? ($file['file_size_bytes'] ?? 0),
+                    'width' => $meta['width'],
+                    'height' => $meta['height'],
+                    'created_by' => current_user()['id'],
+                ]);
+                $revisionId = (int)$pdo->lastInsertId();
+
+                foreach ($axes as $axis) {
+                    $valueKey = $classificationMap[$axis['axis_key']] ?? '';
+                    if ($valueKey === '') {
+                        continue;
+                    }
+                    $revisionClassStmt->execute([
                         'revision_id' => $revisionId,
-                        'file_path' => $finalTarget,
-                        'file_hash' => $meta['file_hash'] ?? $file['file_hash'],
-                        'mime_type' => $meta['mime_type'] ?? ($file['mime_type'] ?? 'application/octet-stream'),
-                        'file_size_bytes' => $meta['file_size_bytes'] ?? ($file['file_size_bytes'] ?? 0),
-                        'id' => $file['id'],
+                        'axis_id' => $axis['id'],
+                        'value_key' => $valueKey,
                     ]);
-
-                    $nextVersion++;
                 }
 
-                if (!$error) {
-                    $message = ($message ? $message . ' ' : '') . sprintf('%d Datei(en) klassifiziert und als Revision gespeichert.', count($files));
-                }
+                $state = derive_classification_state($axes, $classificationMap);
+                replace_inventory_classifications($pdo, (int)$file['id'], $axes, $classificationMap);
+                $updateInventory->execute([
+                    'state' => $state,
+                    'revision_id' => $revisionId,
+                    'file_path' => $finalTarget,
+                    'file_hash' => $meta['file_hash'] ?? $file['file_hash'],
+                    'mime_type' => $meta['mime_type'] ?? ($file['mime_type'] ?? 'application/octet-stream'),
+                    'file_size_bytes' => $meta['file_size_bytes'] ?? ($file['file_size_bytes'] ?? 0),
+                    'id' => $file['id'],
+                ]);
+
+                $nextVersion++;
+            }
+
+            if (!$error) {
+                $message = ($message ? $message . ' ' : '') . sprintf('%d Datei(en) klassifiziert und als Revision gespeichert.', count($selectedFiles));
             }
         }
     }
 }
 
-$linkStmt = $pdo->prepare('SELECT fi.*, l.id AS link_id, l.notes FROM entity_file_links l JOIN file_inventory fi ON fi.id = l.file_inventory_id WHERE l.entity_id = :entity_id AND fi.project_id = :project_id AND fi.classification_state <> "fully_classified" ORDER BY fi.last_seen_at DESC');
-$linkStmt->execute(['entity_id' => $entityId, 'project_id' => $projectId]);
+$filterJoins = '';
+$filterParams = ['entity_id' => $entityId, 'project_id' => $projectId];
+$joinIndex = 0;
+foreach ($axes as $axis) {
+    $filterValue = $filterValues[$axis['axis_key']] ?? '';
+    if ($filterValue === '') {
+        continue;
+    }
+
+    $alias = 'ic' . $joinIndex;
+    $filterJoins .= " JOIN inventory_classifications $alias ON $alias.file_inventory_id = fi.id AND $alias.axis_id = :{$alias}_axis AND $alias.value_key = :{$alias}_value";
+    $filterParams[$alias . '_axis'] = $axis['id'];
+    $filterParams[$alias . '_value'] = $filterValue;
+    $joinIndex++;
+}
+
+$linkQuery = 'SELECT fi.*, l.id AS link_id, l.notes FROM entity_file_links l JOIN file_inventory fi ON fi.id = l.file_inventory_id' . $filterJoins . ' WHERE l.entity_id = :entity_id AND fi.project_id = :project_id AND (fi.classification_state <> "fully_classified" OR fi.asset_revision_id IS NULL) ORDER BY fi.last_seen_at DESC';
+$linkStmt = $pdo->prepare($linkQuery);
+$linkStmt->execute($filterParams);
 $links = $linkStmt->fetchAll();
+
+$linkInventoryIds = array_map(fn($row) => (int)$row['id'], $links);
+$linkClassifications = fetch_inventory_classifications($pdo, $linkInventoryIds);
 
 $inventoryThumbs = [];
 foreach ($links as $file) {
@@ -257,12 +370,18 @@ foreach ($links as $file) {
 
 $selectedMeta = null;
 $selectedPreview = null;
+$selectedClassificationValues = [];
 if ($selectedFile) {
     $selectedPreview = $inventoryThumbs[(int)$selectedFile['id']] ?? null;
     $absolute = $projectRoot . $selectedFile['file_path'];
     if ($projectRoot !== '' && file_exists($absolute)) {
         $selectedMeta = collect_file_metadata($absolute);
     }
+    $selectedClassificationValues = $linkClassifications[(int)$selectedFile['id']] ?? [];
+}
+
+if (empty($classInputs) && !empty($selectedClassificationValues)) {
+    $classInputs = $selectedClassificationValues;
 }
 
 render_header('Entity Files');
@@ -283,9 +402,34 @@ render_header('Entity Files');
             <input type="hidden" name="selected_links" id="entity-bulk-selected" value="">
             <div class="card-header">
                 <div class="fw-semibold">Dateien dieser Entity (<?= count($links) ?>)</div>
-                <small class="text-muted">Status ≠ fully_classified</small>
+                <small class="text-muted">Offene Dateien (keine Revision)</small>
             </div>
             <div class="card-body p-0" style="max-height: 70vh; overflow-y: auto;">
+                <div class="p-3 border-bottom">
+                    <form method="get" class="row g-2 align-items-end">
+                        <input type="hidden" name="entity_id" value="<?= (int)$entityId ?>">
+                        <?php foreach ($axes as $axis): ?>
+                            <?php $filterName = 'filter_axis_' . (int)$axis['id']; ?>
+                            <div class="col-12">
+                                <label class="form-label mb-1" for="<?= htmlspecialchars($filterName) ?>">Filter: <?= htmlspecialchars($axis['label']) ?></label>
+                                <?php if (!empty($axis['values'])): ?>
+                                    <select class="form-select form-select-sm" name="<?= htmlspecialchars($filterName) ?>" id="<?= htmlspecialchars($filterName) ?>">
+                                        <option value="">–</option>
+                                        <?php foreach ($axis['values'] as $value): ?>
+                                            <option value="<?= htmlspecialchars($value['value_key']) ?>" <?= ($filterSelections[$filterName] ?? '') === $value['value_key'] ? 'selected' : '' ?>><?= htmlspecialchars($value['label']) ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                <?php else: ?>
+                                    <input class="form-control form-control-sm" type="text" name="<?= htmlspecialchars($filterName) ?>" id="<?= htmlspecialchars($filterName) ?>" value="<?= htmlspecialchars($filterSelections[$filterName] ?? '') ?>" placeholder="Wert oder Slug">
+                                <?php endif; ?>
+                            </div>
+                        <?php endforeach; ?>
+                        <div class="col-12 d-flex gap-2">
+                            <button class="btn btn-sm btn-outline-primary" type="submit">Filter anwenden</button>
+                            <a class="btn btn-sm btn-outline-secondary" href="/entity_files.php?entity_id=<?= (int)$entityId ?>">Zurücksetzen</a>
+                        </div>
+                    </form>
+                </div>
                 <?php if (empty($links)): ?>
                     <div class="p-3 text-muted">Keine offenen Dateien für diese Entity.</div>
                 <?php else: ?>
@@ -305,6 +449,10 @@ render_header('Entity Files');
                                 <div class="flex-grow-1">
                                     <div class="fw-semibold small mb-1">#<?= (int)$file['id'] ?> · <code><?= htmlspecialchars($file['file_path']) ?></code></div>
                                     <div class="small text-muted">State: <?= htmlspecialchars($file['classification_state']) ?> · Last seen <?= htmlspecialchars($file['last_seen_at']) ?></div>
+                                    <?php $savedValues = $linkClassifications[(int)$file['id']] ?? []; ?>
+                                    <?php if (!empty($savedValues)): ?>
+                                        <div class="small text-muted">Vor-Klassifizierung: <?= htmlspecialchars(implode(', ', array_map(fn($k, $v) => $k . ': ' . $v, array_keys($savedValues), $savedValues))) ?></div>
+                                    <?php endif; ?>
                                     <?php if (!empty($file['notes'])): ?>
                                         <div class="small text-muted">Notiz: <?= htmlspecialchars($file['notes']) ?></div>
                                     <?php endif; ?>
@@ -353,6 +501,12 @@ render_header('Entity Files');
                                 –
                             <?php endif; ?>
                         </dd>
+                        <?php if (!empty($selectedClassificationValues)): ?>
+                            <dt class="col-sm-4">Vor-Klassifizierung</dt>
+                            <dd class="col-sm-8">
+                                <div class="small text-muted mb-0"><?php foreach ($selectedClassificationValues as $axisKey => $valueKey): ?><span class="me-2"><strong><?= htmlspecialchars($axisKey) ?>:</strong> <?= htmlspecialchars($valueKey) ?></span><?php endforeach; ?></div>
+                            </dd>
+                        <?php endif; ?>
                     </dl>
                 <?php endif; ?>
             </div>
@@ -366,7 +520,7 @@ render_header('Entity Files');
             </div>
             <div class="card-body">
                 <form method="post">
-                    <input type="hidden" name="action" value="classify">
+                    <input type="hidden" name="action" id="classification-action" value="classify">
                     <input type="hidden" name="selected_links" class="entity-selected-target" value="">
                     <?php if (empty($axes)): ?>
                         <p class="text-muted small">Keine Achsen für diesen Entity-Typ konfiguriert.</p>
@@ -378,11 +532,11 @@ render_header('Entity Files');
                                     <select class="form-select form-select-sm axis-field" name="axis_<?= (int)$axis['id'] ?>" id="axis_<?= (int)$axis['id'] ?>" data-axis-key="<?= htmlspecialchars($axis['axis_key']) ?>">
                                         <option value="">–</option>
                                         <?php foreach ($axis['values'] as $value): ?>
-                                            <option value="<?= htmlspecialchars($value['value_key']) ?>"><?= htmlspecialchars($value['label']) ?></option>
+                                            <option value="<?= htmlspecialchars($value['value_key']) ?>" <?= (($classInputs[$axis['axis_key']] ?? '') === $value['value_key']) ? 'selected' : '' ?>><?= htmlspecialchars($value['label']) ?></option>
                                         <?php endforeach; ?>
                                     </select>
                                 <?php else: ?>
-                                    <input class="form-control form-control-sm axis-field" name="axis_<?= (int)$axis['id'] ?>" id="axis_<?= (int)$axis['id'] ?>" data-axis-key="<?= htmlspecialchars($axis['axis_key']) ?>" placeholder="Wert">
+                                    <input class="form-control form-control-sm axis-field" name="axis_<?= (int)$axis['id'] ?>" id="axis_<?= (int)$axis['id'] ?>" data-axis-key="<?= htmlspecialchars($axis['axis_key']) ?>" value="<?= htmlspecialchars($classInputs[$axis['axis_key']] ?? '') ?>" placeholder="Wert">
                                 <?php endif; ?>
                             </div>
                         <?php endforeach; ?>
@@ -411,7 +565,10 @@ render_header('Entity Files');
                         <label class="form-label" for="new_asset_description">Beschreibung</label>
                         <textarea class="form-control form-control-sm" name="new_asset_description" id="new_asset_description" rows="2"></textarea>
                     </div>
-                    <button class="btn btn-primary w-100" type="submit">Auswahl klassifizieren &amp; speichern</button>
+                    <div class="d-grid gap-2">
+                        <button class="btn btn-outline-primary" type="button" onclick="submitClassification('save_axes')">Nur Vor-Klassifizierung speichern</button>
+                        <button class="btn btn-primary" type="button" onclick="submitClassification('classify')">Auswahl klassifizieren &amp; speichern</button>
+                    </div>
                 </form>
             </div>
         </div>
@@ -432,6 +589,20 @@ render_header('Entity Files');
 
     checkboxes.forEach(cb => cb.addEventListener('change', syncSelection));
     syncSelection();
+})();
+</script>
+<script>
+(function() {
+    const actionInput = document.getElementById('classification-action');
+    const classificationForm = actionInput ? actionInput.closest('form') : null;
+
+    window.submitClassification = function(action) {
+        if (!actionInput || !classificationForm) {
+            return;
+        }
+        actionInput.value = action;
+        classificationForm.submit();
+    };
 })();
 </script>
 <script>

@@ -129,6 +129,50 @@ function replace_asset_classifications(PDO $pdo, int $assetId, array $axes, arra
     }
 }
 
+function fetch_inventory_classifications(PDO $pdo, array $inventoryIds): array
+{
+    if (empty($inventoryIds)) {
+        return [];
+    }
+
+    $placeholders = implode(',', array_fill(0, count($inventoryIds), '?'));
+    $stmt = $pdo->prepare("SELECT ic.file_inventory_id, ca.axis_key, ic.value_key FROM inventory_classifications ic JOIN classification_axes ca ON ca.id = ic.axis_id WHERE ic.file_inventory_id IN ($placeholders)");
+    $stmt->execute($inventoryIds);
+    $rows = $stmt->fetchAll();
+
+    $map = [];
+    foreach ($rows as $row) {
+        $fileId = (int)$row['file_inventory_id'];
+        if (!isset($map[$fileId])) {
+            $map[$fileId] = [];
+        }
+        $map[$fileId][$row['axis_key']] = $row['value_key'];
+    }
+
+    return $map;
+}
+
+function replace_inventory_classifications(PDO $pdo, int $inventoryId, array $axes, array $values): void
+{
+    $pdo->prepare('DELETE FROM inventory_classifications WHERE file_inventory_id = :id')->execute(['id' => $inventoryId]);
+    if (empty($values)) {
+        return;
+    }
+
+    $stmt = $pdo->prepare('INSERT INTO inventory_classifications (file_inventory_id, axis_id, value_key) VALUES (:inventory_id, :axis_id, :value_key)');
+    foreach ($axes as $axis) {
+        $key = $axis['axis_key'];
+        if (!isset($values[$key]) || $values[$key] === '') {
+            continue;
+        }
+        $stmt->execute([
+            'inventory_id' => $inventoryId,
+            'axis_id' => $axis['id'],
+            'value_key' => $values[$key],
+        ]);
+    }
+}
+
 function derive_classification_state(array $axes, array $values): string
 {
     $normalized = array_change_key_case($values, CASE_LOWER);
