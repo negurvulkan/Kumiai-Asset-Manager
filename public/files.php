@@ -35,7 +35,7 @@ function load_asset_with_entity(PDO $pdo, int $projectId, int $assetId): ?array
 
 function link_inventory_batch(PDO $pdo, array $projectRow, int $projectId, array $inventoryIds, int $assetId, string $viewLabel, string $manualExtension, bool $applyTemplate): array
 {
-    $result = ['linked' => 0, 'errors' => []];
+    $result = ['linked' => 0, 'errors' => [], 'preclassified' => 0];
     if (empty($inventoryIds) || $assetId <= 0) {
         return $result;
     }
@@ -72,6 +72,7 @@ function link_inventory_batch(PDO $pdo, array $projectRow, int $projectId, array
     $inventoryClassifications = fetch_inventory_classifications($pdo, array_map(fn($file) => (int)$file['id'], $files));
     $axesForAsset = [];
     $classificationMap = [];
+    $classificationReady = true;
     if (!empty($asset['primary_entity_type'])) {
         $axesForAsset = load_axes_for_entity($pdo, $asset['primary_entity_type']);
         $assetClassifications = fetch_asset_classifications($pdo, $assetId);
@@ -96,20 +97,77 @@ function link_inventory_batch(PDO $pdo, array $projectRow, int $projectId, array
             }
         }
 
-        if (empty($assetClassifications) && !empty($classificationMap)) {
+        if ($viewLabel !== '' && !isset($classificationMap['view'])) {
+            $classificationMap['view'] = $viewLabel;
+        }
+
+        $missingAxes = [];
+        $mismatchedAxes = [];
+
+        foreach ($axesForAsset as $axis) {
+            $key = $axis['axis_key'];
+            $value = $classificationMap[$key] ?? '';
+            $assetValue = $assetClassifications[$key] ?? '';
+
+            if ($value === '') {
+                $missingAxes[] = $axis['label'] ?? $key;
+                continue;
+            }
+
+            if ($assetValue !== '' && $assetValue !== $value) {
+                $mismatchedAxes[] = $axis['label'] ?? $key;
+            }
+        }
+
+        $classificationReady = empty($missingAxes) && empty($mismatchedAxes);
+
+        if ($classificationReady && empty($assetClassifications) && !empty($classificationMap)) {
             replace_asset_classifications($pdo, $assetId, $axesForAsset, $classificationMap);
+        }
+
+        if (!$classificationReady) {
+            $parts = [];
+            if (!empty($missingAxes)) {
+                $parts[] = 'fehlende Achsen: ' . implode(', ', $missingAxes);
+            }
+            if (!empty($mismatchedAxes)) {
+                $parts[] = 'abweichende Achsen: ' . implode(', ', $mismatchedAxes);
+            }
+            $result['errors'][] = 'Revision nicht angelegt – ' . implode('; ', $parts) . '. Vor-Klassifizierung aktualisiert.';
         }
     }
 
     $revisionClassStmt = !empty($axesForAsset) ? $pdo->prepare('INSERT INTO revision_classifications (revision_id, axis_id, value_key) VALUES (:revision_id, :axis_id, :value_key)') : null;
+    $updateInventoryState = $pdo->prepare('UPDATE file_inventory SET classification_state = :classification_state, last_seen_at = NOW() WHERE id = :id');
 
     foreach ($files as $file) {
+        $classificationForPath = $classificationMap;
+        $finalValues = $inventoryClassifications[(int)$file['id']] ?? [];
+
+        if (!empty($axesForAsset)) {
+            foreach ($axesForAsset as $axis) {
+                $key = $axis['axis_key'];
+                $value = $classificationForPath[$key] ?? '';
+                if ($value !== '') {
+                    $finalValues[$key] = $value;
+                }
+            }
+            replace_inventory_classifications($pdo, (int)$file['id'], $axesForAsset, $finalValues);
+        }
+
+        $state = !empty($axesForAsset) ? derive_classification_state($axesForAsset, $finalValues) : 'fully_classified';
+
+        if (isset($classificationReady) && !$classificationReady) {
+            $updateInventoryState->execute([
+                'classification_state' => $state,
+                'id' => $file['id'],
+            ]);
+            $result['preclassified']++;
+            continue;
+        }
+
         $targetPath = sanitize_relative_path($file['file_path']);
         $meta = collect_file_metadata($projectRoot . $file['file_path']);
-        $classificationForPath = $classificationMap;
-        if ($viewLabel !== '' && !isset($classificationForPath['view'])) {
-            $classificationForPath['view'] = $viewLabel;
-        }
 
         if ($applyTemplate) {
             $extension = $manualExtension !== '' ? ltrim($manualExtension, '.') : extension_from_path($file['file_path']);
@@ -169,11 +227,6 @@ function link_inventory_batch(PDO $pdo, array $projectRow, int $projectId, array
             }
         }
 
-        if (!empty($axesForAsset)) {
-            replace_inventory_classifications($pdo, (int)$file['id'], $axesForAsset, $classificationMap);
-        }
-
-        $state = !empty($axesForAsset) ? derive_classification_state($axesForAsset, $classificationMap) : 'fully_classified';
         $updateInventory = $pdo->prepare('UPDATE file_inventory SET status = "linked", classification_state = :classification_state, asset_revision_id = :revision_id, file_path = :file_path, file_hash = :file_hash, mime_type = :mime_type, file_size_bytes = :file_size_bytes, last_seen_at = NOW() WHERE id = :id');
         $updateInventory->execute([
             'classification_state' => $state,
@@ -316,6 +369,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($result['linked'] > 0) {
                 $message = sprintf('%d Datei(en) verknüpft und als Revision gespeichert.', $result['linked']);
             }
+            if (!empty($result['preclassified'])) {
+                $message = ($message ? $message . ' ' : '') . sprintf('%d Datei(en) nur vor-klassifiziert – fehlende/abweichende Achsen.', $result['preclassified']);
+            }
             if (!empty($result['errors'])) {
                 $error = implode(' ', $result['errors']);
             }
@@ -379,6 +435,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $result = link_inventory_batch($pdo, $projectRow, $projectId, $selectedIds, $newAssetId, $viewLabel, $manualExtension, $applyTemplate);
                 if ($result['linked'] > 0) {
                     $message = sprintf('Asset erstellt und %d Datei(en) verknüpft.', $result['linked']);
+                }
+                if (!empty($result['preclassified'])) {
+                    $message = ($message ? $message . ' ' : '') . sprintf('%d Datei(en) nur vor-klassifiziert – Klassifizierung unvollständig/abweichend.', $result['preclassified']);
                 }
                 if (!empty($result['errors'])) {
                     $error = implode(' ', $result['errors']);
@@ -606,6 +665,7 @@ render_header('Files');
                     <input class="form-check-input" type="checkbox" name="apply_template" id="bulk_template" checked>
                     <label class="form-check-label" for="bulk_template">Naming-Template anwenden & verschieben</label>
                 </div>
+                <p class="small text-muted">Revisionen werden nur angelegt, wenn alle erforderlichen Achsen gesetzt sind und zu den Asset-Klassifikationen passen. Andernfalls bleibt die Auswahl vor-klassifiziert.</p>
                 <button class="btn btn-primary w-100" type="button" onclick="submitBulk('link_asset')">Auswahl verknüpfen</button>
             </div>
         </form>
@@ -634,6 +694,9 @@ render_header('Files');
                         <dd class="col-sm-8">
                             <span class="badge bg-light text-dark border text-uppercase"><?= htmlspecialchars($selectedFile['classification_state']) ?></span>
                         </dd>
+                        <?php if ($selectedFile['classification_state'] !== 'fully_classified'): ?>
+                            <dd class="col-sm-12 text-muted small">Vor-Klassifizierung aktiv – Revisionen werden nur gespeichert, wenn alle Achsenwerte vollständig sind und zum Ziel-Asset passen.</dd>
+                        <?php endif; ?>
                         <dt class="col-sm-4">Hash</dt>
                         <dd class="col-sm-8"><span class="small text-monospace"><?= htmlspecialchars($selectedFile['file_hash']) ?></span></dd>
                         <dt class="col-sm-4">Größe</dt>
