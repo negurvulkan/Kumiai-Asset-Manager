@@ -571,6 +571,9 @@ const typeModal = new bootstrap.Modal(typeModalEl);
 const fieldsBody = document.getElementById('fieldsBody');
 
 function openTypeModal(data = null) {
+    if (typeof data === 'string') {
+        try { data = JSON.parse(data); } catch (e) { console.warn('Konnte Entity-Typ nicht parsen', e); data = null; }
+    }
     document.getElementById('typeAction').value = data ? 'update_type' : 'add_type';
     document.getElementById('typeId').value = data ? data.id : '';
     document.getElementById('typeName').value = data ? data.name : '';

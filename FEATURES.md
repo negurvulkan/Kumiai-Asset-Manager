@@ -17,7 +17,7 @@
 ## Generisches Entity-System
 - Projekt-spezifische Entity-Typen (z. B. character, location, scene, chapter, prop, background, item, creature).
 - Entities mit Feldern für Projekt, Typ, Name, Slug, Beschreibung und Metadaten-JSON (Erfassung im UI inkl. JSON-Validierung und Anzeige).
-- Dynamische Zusatzfelder pro Entity-Typ: Definition von Feldern (Text, Zahl, Select, Boolean) im UI (Type-Editor), die automatisch in den Entity-Formularen gerendert und validiert werden.
+- Dynamische Zusatzfelder pro Entity-Typ: Definition von Feldern (Text, Zahl, Select, Boolean) im UI (Type-Editor), die automatisch in den Entity-Formularen gerendert und validiert werden; die Detailansicht zeigt alle definierten Felder inkl. leeren Platzhaltern an.
 - Suchfilterung basierend auf Entity-Typ und dessen dynamischen Feldern.
 - Zusatzinformationen (Entity Infos): Beliebige Anzahl an Textblöcken (z. B. Hintergrundgeschichte, Persönlichkeit) mit Markdown-Support, direkt in der Detailansicht bearbeitbar.
 - Entities lassen sich inkl. Slug, Typ, Beschreibung und dynamischen Metadaten im UI aktualisieren.

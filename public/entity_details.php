@@ -103,7 +103,9 @@ render_header('Entity: ' . htmlspecialchars($entity['name']));
 
                 <?php
                     $metadata = json_decode($entity['metadata_json'] ?: '{}', true);
+                    if (!is_array($metadata)) $metadata = [];
                     $defs = !empty($entity['field_definitions']) ? json_decode($entity['field_definitions'], true) : [];
+                    if (!is_array($defs)) $defs = [];
                     $shownKeys = [];
                 ?>
 
@@ -113,21 +115,22 @@ render_header('Entity: ' . htmlspecialchars($entity['name']));
                         <?php foreach ($defs as $def): ?>
                             <?php
                                 $key = $def['key'] ?? '';
+                                if ($key === '') continue;
                                 $shownKeys[] = $key;
                                 $val = $metadata[$key] ?? null;
                             ?>
-                            <?php if ($val !== null && $val !== ''): ?>
-                                <dt class="col-sm-5 text-muted small"><?= htmlspecialchars($def['label'] ?? $key) ?></dt>
-                                <dd class="col-sm-7">
-                                    <?php
-                                        if ($def['type'] === 'boolean') {
-                                            echo $val ? 'Ja' : 'Nein';
-                                        } else {
-                                            echo htmlspecialchars((string)$val);
-                                        }
-                                    ?>
-                                </dd>
-                            <?php endif; ?>
+                            <dt class="col-sm-5 text-muted small"><?= htmlspecialchars($def['label'] ?? $key) ?></dt>
+                            <dd class="col-sm-7">
+                                <?php if ($val === null || $val === ''): ?>
+                                    <span class="text-muted">–</span>
+                                <?php elseif ($def['type'] === 'boolean'): ?>
+                                    <?= $val ? 'Ja' : 'Nein' ?>
+                                <?php elseif (is_array($val) || is_object($val)): ?>
+                                    <pre class="mb-0 bg-light p-1 rounded" style="font-size:0.8em"><?= htmlspecialchars(json_encode($val)) ?></pre>
+                                <?php else: ?>
+                                    <?= htmlspecialchars((string)$val) ?>
+                                <?php endif; ?>
+                            </dd>
                         <?php endforeach; ?>
                     </dl>
                 <?php endif; ?>
