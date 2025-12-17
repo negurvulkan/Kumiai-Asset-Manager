@@ -28,6 +28,7 @@ function render_header(string $title): void
                     <li class="nav-item"><a class="nav-link" href="/entities.php">Entities</a></li>
                     <li class="nav-item"><a class="nav-link" href="/assets.php">Assets</a></li>
                     <li class="nav-item"><a class="nav-link" href="/files.php">Files</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/ai_reviews.php">AI Reviews</a></li>
                 </ul>
                 <ul class="navbar-nav">
                     <?php if ($user): ?>

@@ -3,6 +3,7 @@ require_once __DIR__ . '/../includes/layout.php';
 require_once __DIR__ . '/../includes/naming.php';
 require_once __DIR__ . '/../includes/files.php';
 require_once __DIR__ . '/../includes/classification.php';
+require_once __DIR__ . '/../includes/services/ai_classification.php';
 require_login();
 
 function parse_selected_link_ids(): array
@@ -61,9 +62,12 @@ $projectStmt = $pdo->prepare('SELECT * FROM projects WHERE id = :id');
 $projectStmt->execute(['id' => $projectId]);
 $projectFull = $projectStmt->fetch();
 $projectRoot = rtrim($projectFull['root_path'] ?? '', '/');
+$projectRole = $projectRow['role'] ?? '';
+$canUseAi = in_array($projectRole, ['owner', 'admin', 'editor'], true);
 
 $message = null;
 $error = null;
+$aiResult = null;
 
 $axes = load_axes_for_entity($pdo, $entity['type_name'] ?? '');
 $classInputs = [];
@@ -84,7 +88,7 @@ $filterValues = normalize_axis_values($axes, $filterRaw);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
-    if (in_array($action, ['classify', 'save_axes'], true) && !empty($selectedLinks)) {
+    if (in_array($action, ['classify', 'save_axes', 'ai_classify'], true) && !empty($selectedLinks)) {
         $placeholders = implode(',', array_fill(0, count($selectedLinks), '?'));
         $fileStmt = $pdo->prepare("SELECT fi.*, l.id AS link_id FROM entity_file_links l JOIN file_inventory fi ON fi.id = l.file_inventory_id WHERE l.entity_id = ? AND fi.project_id = ? AND l.id IN ($placeholders)");
         $params = array_merge([$entityId, $projectId], $selectedLinks);
@@ -389,6 +393,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
     }
+
+    if ($action === 'ai_classify' && !$error) {
+        if (!$canUseAi) {
+            $error = 'Nur Admins/Editor dürfen den KI-Service nutzen.';
+        } elseif (empty($selectedFiles)) {
+            $error = 'Bitte mindestens eine Datei auswählen.';
+        } else {
+            $target = $selectedFiles[0];
+            $service = new AiClassificationService($pdo, $config);
+            $aiResult = $service->classifyInventoryFile((int)$target['id'], current_user());
+            if (!($aiResult['success'] ?? false)) {
+                $error = 'KI-Lauf fehlgeschlagen: ' . ($aiResult['error'] ?? 'Unbekannter Fehler');
+            }
+        }
+    }
 }
 
 $filterJoins = '';
@@ -580,6 +599,56 @@ render_header('Entity Files');
                             </dd>
                         <?php endif; ?>
                     </dl>
+                    <?php if ($canUseAi): ?>
+                        <div class="border-top pt-3 mt-3">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <div>
+                                    <div class="fw-semibold">KI-Klassifizierung</div>
+                                    <small class="text-muted">Nur für Admin/Editor verfügbar.</small>
+                                </div>
+                                <form method="post" class="d-flex align-items-center gap-2">
+                                    <input type="hidden" name="action" value="ai_classify">
+                                    <input type="hidden" name="selected_links" class="entity-selected-target" value="">
+                                    <button class="btn btn-sm btn-outline-primary" type="submit">KI-Run starten</button>
+                                </form>
+                            </div>
+                            <?php if ($aiResult && ($aiResult['success'] ?? false)): ?>
+                                <?php $decision = $aiResult['decision'] ?? []; ?>
+                                <div class="mb-2">
+                                    <span class="badge bg-<?= ($decision['status'] ?? '') === 'auto_assigned' ? 'success' : 'warning text-dark' ?>">
+                                        <?= htmlspecialchars($decision['status'] ?? 'needs_review') ?>
+                                    </span>
+                                    <span class="small text-muted ms-2"><?= htmlspecialchars($decision['reason'] ?? 'Ohne Begründung') ?></span>
+                                </div>
+                                <dl class="row small mb-3">
+                                    <dt class="col-sm-4">Overall</dt>
+                                    <dd class="col-sm-8"><?= number_format((float)($decision['overall_confidence'] ?? 0.0), 3) ?></dd>
+                                    <dt class="col-sm-4">Schwelle</dt>
+                                    <dd class="col-sm-8"><?= number_format((float)($decision['score_threshold'] ?? 0.0), 3) ?></dd>
+                                    <dt class="col-sm-4">Margin</dt>
+                                    <dd class="col-sm-8"><?= number_format((float)($decision['score_margin'] ?? 0.0), 3) ?> (Runner-up <?= number_format((float)($decision['runner_up_score'] ?? 0.0), 3) ?>)</dd>
+                                </dl>
+                                <div class="small text-muted mb-1">Vorschläge:</div>
+                                <div class="list-group list-group-flush small">
+                                    <?php foreach ($aiResult['candidates'] ?? [] as $candidate): ?>
+                                        <div class="list-group-item px-2 py-2">
+                                            <div class="d-flex justify-content-between">
+                                                <strong><?= htmlspecialchars($candidate['label'] ?? $candidate['key'] ?? 'n/a') ?></strong>
+                                                <span class="badge bg-light text-dark border"><?= number_format((float)($candidate['score'] ?? 0.0), 3) ?></span>
+                                            </div>
+                                            <?php if (!empty($candidate['reason'])): ?>
+                                                <div class="text-muted"><?= htmlspecialchars($candidate['reason']) ?></div>
+                                            <?php endif; ?>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
+                            <?php elseif ($aiResult && !($aiResult['success'] ?? false)): ?>
+                                <div class="alert alert-warning mb-0 small"><?= htmlspecialchars($aiResult['error'] ?? 'Unbekannter Fehler') ?></div>
+                            <?php else: ?>
+                                <p class="small text-muted mb-0">Starte einen Lauf, um Vorschläge (Score, Margin, Auto-Assign-Status) zu sehen.</p>
+                            <?php endif; ?>
+                        </div>
+                    <?php endif; ?>
                 <?php endif; ?>
             </div>
         </div>
@@ -650,13 +719,15 @@ render_header('Entity Files');
 <script>
 (function() {
     const checkboxes = document.querySelectorAll('.entity-file-checkbox');
-    const targetInput = document.querySelector('.entity-selected-target');
+    const targetInputs = document.querySelectorAll('.entity-selected-target');
     const previewInput = document.getElementById('entity-bulk-selected');
 
     function syncSelection() {
         const ids = Array.from(checkboxes).filter(cb => cb.checked).map(cb => cb.value);
         const value = ids.join(',');
-        if (targetInput) targetInput.value = value;
+        if (targetInputs.length > 0) {
+            targetInputs.forEach((input) => input.value = value);
+        }
         if (previewInput) previewInput.value = value;
     }
 

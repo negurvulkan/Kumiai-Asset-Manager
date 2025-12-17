@@ -3,10 +3,12 @@ require_once __DIR__ . '/../includes/layout.php';
 require_once __DIR__ . '/../includes/naming.php';
 require_once __DIR__ . '/../includes/files.php';
 require_once __DIR__ . '/../includes/classification.php';
+require_once __DIR__ . '/../includes/services/ai_classification.php';
 require_login();
 
 $message = null;
 $error = null;
+$aiResults = [];
 
 $assetId = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 
@@ -65,6 +67,48 @@ $classificationMap = fetch_asset_classifications($pdo, $assetId);
 // POST Handling
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
+
+    if ($action === 'ai_classify_revision') {
+        if (!$canReview) {
+            $error = 'Keine Berechtigung für den KI-Run.';
+        } else {
+            $revId = (int)($_POST['revision_id'] ?? 0);
+            if ($revId <= 0) {
+                $error = 'Ungültige Revision für den KI-Run.';
+            } else {
+                $revStmt = $pdo->prepare('SELECT id, file_path FROM asset_revisions WHERE id = :id AND asset_id = :asset_id');
+                $revStmt->execute(['id' => $revId, 'asset_id' => $assetId]);
+                $revRow = $revStmt->fetch();
+                if (!$revRow) {
+                    $error = 'Revision gehört nicht zu diesem Asset.';
+                } else {
+                    $inventoryRow = null;
+                    $inventoryStmt = $pdo->prepare('SELECT * FROM file_inventory WHERE asset_revision_id = :revision_id LIMIT 1');
+                    $inventoryStmt->execute(['revision_id' => $revId]);
+                    $inventoryRow = $inventoryStmt->fetch();
+
+                    if (!$inventoryRow && $projectRoot !== '' && ($revRow['file_path'] ?? '') !== '') {
+                        $byPath = $pdo->prepare('SELECT * FROM file_inventory WHERE project_id = :project_id AND file_path = :file_path LIMIT 1');
+                        $byPath->execute(['project_id' => $projectId, 'file_path' => $revRow['file_path']]);
+                        $inventoryRow = $byPath->fetch();
+                    }
+
+                    if (!$inventoryRow) {
+                        $error = 'Kein Inventory-Eintrag für diese Revision gefunden.';
+                    } else {
+                        $service = new AiClassificationService($pdo, $config);
+                        $result = $service->classifyInventoryFile((int)$inventoryRow['id'], current_user());
+                        if ($result['success'] ?? false) {
+                            $aiResults[$revId] = $result;
+                            $message = 'KI-Lauf abgeschlossen.';
+                        } else {
+                            $error = 'KI-Lauf fehlgeschlagen: ' . ($result['error'] ?? 'Unbekannter Fehler');
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     if ($action === 'update_asset') {
         $displayName = trim($_POST['asset_display_name'] ?? '');
@@ -291,6 +335,26 @@ $revisionsStmt = $pdo->prepare('SELECT r.*, u.display_name AS reviewed_by_name
 $revisionsStmt->execute(['asset_id' => $assetId]);
 $revisions = $revisionsStmt->fetchAll();
 
+$revisionIds = [];
+$inventoryByRevision = [];
+$inventoryIds = [];
+if (!empty($revisions)) {
+    $revisionIds = array_map(fn($rev) => (int)$rev['id'], $revisions);
+    $placeholders = implode(',', array_fill(0, count($revisionIds), '?'));
+    $invStmt = $pdo->prepare("SELECT * FROM file_inventory WHERE asset_revision_id IN ($placeholders)");
+    $invStmt->execute($revisionIds);
+    foreach ($invStmt->fetchAll() as $invRow) {
+        $revId = (int)$invRow['asset_revision_id'];
+        $inventoryByRevision[$revId] = $invRow;
+        $inventoryIds[] = (int)$invRow['id'];
+    }
+}
+
+$inventoryToRevision = [];
+foreach ($inventoryByRevision as $revId => $invRow) {
+    $inventoryToRevision[(int)$invRow['id']] = $revId;
+}
+
 $revisionThumbs = [];
 foreach ($revisions as $revision) {
     $thumb = thumbnail_public_if_exists($projectId, $revision['file_path']);
@@ -299,6 +363,35 @@ foreach ($revisions as $revision) {
         $thumb = generate_thumbnail($projectId, $revision['file_path'], $absolute);
     }
     $revisionThumbs[(int)$revision['id']] = $thumb;
+}
+
+$auditsByRevision = [];
+if (!empty($revisionIds) || !empty($inventoryIds)) {
+    $clauses = [];
+    $params = [];
+    if (!empty($revisionIds)) {
+        $clauses[] = 'revision_id IN (' . implode(',', array_fill(0, count($revisionIds), '?')) . ')';
+        $params = array_merge($params, $revisionIds);
+    }
+    if (!empty($inventoryIds)) {
+        $clauses[] = 'file_inventory_id IN (' . implode(',', array_fill(0, count($inventoryIds), '?')) . ')';
+        $params = array_merge($params, $inventoryIds);
+    }
+    $auditSql = 'SELECT * FROM ai_audit_logs WHERE ' . implode(' OR ', $clauses) . ' ORDER BY created_at DESC LIMIT 200';
+    $auditStmt = $pdo->prepare($auditSql);
+    $auditStmt->execute($params);
+    foreach ($auditStmt->fetchAll() as $auditRow) {
+        $revId = (int)($auditRow['revision_id'] ?? 0);
+        if (!$revId && ($auditRow['file_inventory_id'] ?? null)) {
+            $revId = $inventoryToRevision[(int)$auditRow['file_inventory_id']] ?? 0;
+        }
+        if ($revId) {
+            if (!isset($auditsByRevision[$revId])) {
+                $auditsByRevision[$revId] = [];
+            }
+            $auditsByRevision[$revId][] = $auditRow;
+        }
+    }
 }
 
 // Naming Hint Setup
@@ -525,6 +618,100 @@ render_header('Asset: ' . htmlspecialchars($asset['display_name'] ?? $asset['ass
                                         </div>
                                     </form>
                                 <?php endif; ?>
+                                <?php
+                                    $revId = (int)$rev['id'];
+                                    $invRow = $inventoryByRevision[$revId] ?? null;
+                                    $auditList = $auditsByRevision[$revId] ?? [];
+                                    $latestAudit = $auditList[0] ?? null;
+                                    $aiDisplay = $aiResults[$revId] ?? null;
+                                    if (!$aiDisplay && $latestAudit) {
+                                        $decoded = json_decode($latestAudit['output_payload'] ?? '', true);
+                                        if (is_array($decoded)) {
+                                            $aiDisplay = $decoded;
+                                        }
+                                    }
+                                ?>
+                                <div class="border-top pt-2 mt-3">
+                                    <div class="d-flex justify-content-between align-items-center mb-2">
+                                        <div class="fw-semibold small mb-0">KI-Vorschläge &amp; Audit</div>
+                                        <?php if ($canReview && $invRow): ?>
+                                            <form method="post" class="d-flex align-items-center gap-2 mb-0">
+                                                <input type="hidden" name="action" value="ai_classify_revision">
+                                                <input type="hidden" name="revision_id" value="<?= $revId ?>">
+                                                <button class="btn btn-sm btn-outline-primary" type="submit">KI-Lauf starten</button>
+                                            </form>
+                                        <?php elseif ($canReview): ?>
+                                            <span class="badge bg-light text-dark border small">Kein Inventory-Mapping</span>
+                                        <?php endif; ?>
+                                    </div>
+                                    <?php if ($aiDisplay && ($aiDisplay['success'] ?? true)): ?>
+                                        <?php $decision = $aiDisplay['decision'] ?? []; ?>
+                                        <div class="mb-2">
+                                            <span class="badge bg-<?= ($decision['status'] ?? '') === 'auto_assigned' ? 'success' : 'warning text-dark' ?>">
+                                                <?= htmlspecialchars($decision['status'] ?? 'needs_review') ?>
+                                            </span>
+                                            <span class="small text-muted ms-2"><?= htmlspecialchars($decision['reason'] ?? ($latestAudit['reason'] ?? '')) ?></span>
+                                        </div>
+                                        <dl class="row small mb-2">
+                                            <dt class="col-sm-4">Confidence</dt>
+                                            <dd class="col-sm-8"><?= number_format((float)($decision['overall_confidence'] ?? ($latestAudit['confidence'] ?? 0.0)), 3) ?></dd>
+                                            <dt class="col-sm-4">Margin</dt>
+                                            <dd class="col-sm-8"><?= number_format((float)($decision['score_margin'] ?? 0.0), 3) ?> (Runner-up <?= number_format((float)($decision['runner_up_score'] ?? 0.0), 3) ?>)</dd>
+                                            <dt class="col-sm-4">Threshold</dt>
+                                            <dd class="col-sm-8"><?= number_format((float)($decision['score_threshold'] ?? 0.0), 3) ?></dd>
+                                        </dl>
+                                        <?php if (!empty($aiDisplay['candidates'])): ?>
+                                            <div class="list-group list-group-flush small mb-2">
+                                                <?php foreach ($aiDisplay['candidates'] as $candidate): ?>
+                                                    <div class="list-group-item px-2 py-2">
+                                                        <div class="d-flex justify-content-between">
+                                                            <strong><?= htmlspecialchars($candidate['label'] ?? $candidate['key'] ?? 'n/a') ?></strong>
+                                                            <span class="badge bg-light text-dark border"><?= number_format((float)($candidate['score'] ?? 0.0), 3) ?></span>
+                                                        </div>
+                                                        <?php if (!empty($candidate['reason'])): ?>
+                                                            <div class="text-muted"><?= htmlspecialchars($candidate['reason']) ?></div>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                <?php endforeach; ?>
+                                            </div>
+                                        <?php else: ?>
+                                            <p class="small text-muted mb-1">Keine Kandidaten vorhanden.</p>
+                                        <?php endif; ?>
+                                    <?php elseif ($aiDisplay && !($aiDisplay['success'] ?? true)): ?>
+                                        <div class="alert alert-warning small mb-2"><?= htmlspecialchars($aiDisplay['error'] ?? 'Unbekannter Fehler') ?></div>
+                                    <?php else: ?>
+                                        <p class="small text-muted mb-2">Noch kein KI-Lauf für diese Revision gespeichert.</p>
+                                    <?php endif; ?>
+
+                                    <?php if (!empty($auditList)): ?>
+                                        <div class="small text-muted mb-1">Audit-Events</div>
+                                        <div class="list-group list-group-flush small">
+                                            <?php foreach (array_slice($auditList, 0, 3) as $audit): ?>
+                                                <div class="list-group-item px-2 py-2">
+                                                    <div class="d-flex justify-content-between">
+                                                        <span class="badge bg-<?= ($audit['status'] ?? '') === 'ok' ? 'success' : (($audit['status'] ?? '') === 'error' ? 'danger' : 'secondary') ?>">
+                                                            <?= htmlspecialchars($audit['status'] ?? 'ok') ?>
+                                                        </span>
+                                                        <span class="text-muted"><?= htmlspecialchars($audit['created_at'] ?? '') ?></span>
+                                                    </div>
+                                                    <div class="mt-1">Aktion: <strong><?= htmlspecialchars($audit['action'] ?? '') ?></strong></div>
+                                                    <?php if (($audit['confidence'] ?? null) !== null): ?>
+                                                        <div>Confidence: <?= number_format((float)$audit['confidence'], 3) ?></div>
+                                                    <?php endif; ?>
+                                                    <?php if (!empty($audit['error_message'])): ?>
+                                                        <div class="text-danger">Fehler: <?= htmlspecialchars($audit['error_message']) ?></div>
+                                                    <?php endif; ?>
+                                                    <?php
+                                                        $diff = json_decode($audit['diff_payload'] ?? '', true);
+                                                        if ($diff):
+                                                    ?>
+                                                        <pre class="bg-light border p-2 mt-1 mb-0"><?= htmlspecialchars(json_encode($diff, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) ?></pre>
+                                                    <?php endif; ?>
+                                                </div>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    <?php endif; ?>
+                                </div>
                             </div>
                         </div>
                     </div>
