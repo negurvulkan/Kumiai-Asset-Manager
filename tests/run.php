@@ -1,6 +1,7 @@
 <?php
 require_once __DIR__ . '/../includes/services/prepass_scoring.php';
 require_once __DIR__ . '/../includes/services/ai_prepass.php';
+require_once __DIR__ . '/../includes/services/entity_candidates.php';
 
 function ensure(bool $condition, string $message): void
 {
@@ -58,6 +59,36 @@ $tests = [
         ensure($normalized['background_type'] === 'unknown', 'Invalid Background -> unknown');
         ensure(abs($normalized['confidence']['overall'] - 1.0) < 0.001, 'Confidence wird auf 1 begrenzt');
         ensure(in_array('human', $normalized['subjects_present'], true), 'Gültige Subjects bleiben erhalten');
+    },
+    'entity_type_candidates' => function () {
+        $features = [
+            'primary_subject' => 'human',
+            'subjects_present' => ['human', 'environment'],
+            'counts' => ['humans' => 1, 'animals' => 0, 'objects' => 0],
+            'human_attributes' => ['present' => true, 'apparent_age' => 'adult', 'gender_presentation' => 'female'],
+            'image_kind' => 'manga',
+            'background_type' => 'plain',
+            'notes' => ['is_single_character_fullbody' => true, 'is_scene_establishing_shot' => false, 'contains_multiple_panels' => false],
+            'free_caption' => 'isolated manga character on white',
+            'confidence' => ['overall' => 0.8, 'primary_subject' => 0.9],
+        ];
+        $priors = (new PrepassScoringService())->derivePriors($features, true);
+        $service = new EntityCandidateService();
+
+        $result = $service->rankEntityTypes(
+            [
+                ['id' => 1, 'name' => 'Character'],
+                ['id' => 2, 'name' => 'Creature'],
+                ['id' => 3, 'name' => 'Location'],
+            ],
+            $features,
+            $priors
+        );
+
+        ensure(count($result['excluded']) === 1 && (int)$result['excluded'][0]['type_id'] === 2, 'Creature wird ausgeschlossen, wenn kein Tier erkennbar ist');
+        ensure(!empty($result['candidates']), 'Es sollten Kandidaten geliefert werden');
+        ensure((int)$result['candidates'][0]['type_id'] === 1, 'Character sollte den höchsten Score haben');
+        ensure((int)$result['candidates'][1]['type_id'] === 3, 'Location sollte als zweites folgen');
     },
 ];
 
