@@ -1,14 +1,18 @@
 <?php
 require_once __DIR__ . '/../auth.php';
 require_once __DIR__ . '/../naming.php';
+require_once __DIR__ . '/../classification.php';
 require_once __DIR__ . '/ai_client.php';
 require_once __DIR__ . '/ai_prepass.php';
+require_once __DIR__ . '/prepass_scoring.php';
+require_once __DIR__ . '/entity_candidates.php';
 
 class AiClassificationService
 {
     private PDO $pdo;
     private AiOpenAiClient $client;
     private AiPrepassService $prepassService;
+    private EntityCandidateService $entityCandidates;
     private array $config;
     private array $thresholds;
 
@@ -19,6 +23,7 @@ class AiClassificationService
         $this->thresholds = $config['openai']['classification'] ?? [];
         $this->client = new AiOpenAiClient($config['openai'] ?? []);
         $this->prepassService = new AiPrepassService($pdo, $config, $this->client);
+        $this->entityCandidates = new EntityCandidateService();
     }
 
     public function classifyInventoryFile(int $inventoryId, array $user): array
@@ -56,6 +61,11 @@ class AiClassificationService
                 }
             }
 
+            $prepassFeatures = $prepass['features'] ?? AiPrepassService::emptyPrepassResult();
+            if (empty($priors)) {
+                $priors = (new PrepassScoringService())->derivePriors($prepassFeatures, true);
+            }
+
             $vision = $this->client->analyzeImageWithSchema(
                 $absolutePath,
                 $this->visionSchema(),
@@ -79,6 +89,12 @@ class AiClassificationService
             $topK = max(1, (int)($this->thresholds['top_k'] ?? 3));
             $scored = array_slice($scored, 0, $topK);
 
+            $entityTypeCandidates = $this->entityCandidates->rankEntityTypes(
+                $this->loadEntityTypes((int)$inventory['project_id']),
+                $prepassFeatures,
+                $priors
+            );
+
             $decision = $this->applyAutoAssign(
                 $scored,
                 (float)($vision['analysis_confidence'] ?? 0.0),
@@ -97,6 +113,7 @@ class AiClassificationService
                     'vision' => $vision,
                     'keywords' => $keywords,
                     'candidates' => $scored,
+                    'entity_type_candidates' => $entityTypeCandidates,
                     'decision' => $decision,
                 ],
                 $decision['overall_confidence'] ?? null,
@@ -112,6 +129,7 @@ class AiClassificationService
                 'vision' => $vision,
                 'keywords' => $keywords,
                 'candidates' => $scored,
+                'entity_type_candidates' => $entityTypeCandidates,
                 'decision' => $decision,
             ];
         } catch (Throwable $e) {
@@ -441,6 +459,14 @@ TXT;
         }
 
         return implode(' | ', array_filter($parts, fn($value) => $value !== ''));
+    }
+
+    private function loadEntityTypes(int $projectId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT id, name FROM entity_types WHERE project_id = :project_id ORDER BY name');
+        $stmt->execute(['project_id' => $projectId]);
+
+        return $stmt->fetchAll();
     }
 
     private function cosineSimilarity(array $vectorA, array $vectorB): float
