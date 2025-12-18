@@ -173,6 +173,28 @@ function replace_inventory_classifications(PDO $pdo, int $inventoryId, array $ax
     }
 }
 
+function replace_revision_classifications(PDO $pdo, int $revisionId, array $axes, array $values): void
+{
+    $pdo->prepare('DELETE FROM revision_classifications WHERE revision_id = :revision_id')->execute(['revision_id' => $revisionId]);
+    if (empty($values)) {
+        return;
+    }
+
+    $stmt = $pdo->prepare('INSERT INTO revision_classifications (revision_id, axis_id, value_key) VALUES (:revision_id, :axis_id, :value_key)');
+    foreach ($axes as $axis) {
+        $key = $axis['axis_key'];
+        if (!isset($values[$key]) || $values[$key] === '') {
+            continue;
+        }
+
+        $stmt->execute([
+            'revision_id' => $revisionId,
+            'axis_id' => $axis['id'],
+            'value_key' => $values[$key],
+        ]);
+    }
+}
+
 function derive_classification_state(array $axes, array $values): string
 {
     $normalized = array_change_key_case($values, CASE_LOWER);

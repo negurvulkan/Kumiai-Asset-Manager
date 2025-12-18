@@ -90,6 +90,33 @@ $tests = [
         ensure((int)$result['candidates'][0]['type_id'] === 1, 'Character sollte den höchsten Score haben');
         ensure((int)$result['candidates'][1]['type_id'] === 3, 'Location sollte als zweites folgen');
     },
+    'entity_type_observation_filter' => function () {
+        $service = new EntityCandidateService();
+        $visual = [
+            'subject_overview' => 'environment',
+            'living_kind' => 'none',
+            'gender_hint' => 'unknown',
+            'age_hint' => '',
+            'age_bucket' => 'unknown',
+            'subject_keywords' => [],
+            'setting' => ['forest background'],
+            'objects' => [],
+            'style_tags' => [],
+        ];
+
+        $result = $service->rankEntityTypesFromObservation(
+            [
+                ['id' => 1, 'name' => 'Character'],
+                ['id' => 2, 'name' => 'Location'],
+            ],
+            $visual,
+            AiPrepassService::emptyPrepassResult(),
+            ['character' => 0.3, 'location' => 0.2]
+        );
+
+        ensure(count($result['excluded']) === 1 && (int)$result['excluded'][0]['type_id'] === 1, 'Character wird bei reinem Environment ausgeschlossen');
+        ensure(!empty($result['candidates']) && (int)$result['candidates'][0]['type_id'] === 2, 'Location bleibt als Top-Kandidat erhalten');
+    },
 ];
 
 $failures = 0;
